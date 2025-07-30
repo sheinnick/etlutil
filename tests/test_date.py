@@ -147,6 +147,42 @@ class TestGenerateDateArray:
         assert result == expected
 
 
+    # leap_year_full_range
+    def test_leap_year_full_range(self):
+        """Test that leap year (2024) has exactly 366 days from start to end."""
+        result = generate_date_array("2024-01-01", "2024-12-31")
+        assert len(result) == 366  # 2024 is a leap year
+        assert result[0] == date(2024, 1, 1)
+        assert result[-1] == date(2024, 12, 31)
+
+    def test_regular_year_full_range(self):
+        """Test that regular year (2023) has exactly 365 days from start to end."""
+        result = generate_date_array("2023-01-01", "2023-12-31")
+        assert len(result) == 365  # 2023 is not a leap year
+        assert result[0] == date(2023, 1, 1)
+        assert result[-1] == date(2023, 12, 31)
+
+    @pytest.mark.parametrize(
+        "year, expected_days",
+        [
+            (2020, 366),  # Leap year
+            (2021, 365),  # Regular year
+            (2022, 365),  # Regular year
+            (2023, 365),  # Regular year
+            (2024, 366),  # Leap year
+            (2025, 365),  # Regular year
+        ]
+    )
+    def test_year_lengths(self, year, expected_days):
+        """Test that different years have correct number of days."""
+        start_date = f"{year}-01-01"
+        end_date = f"{year}-12-31"
+        result = generate_date_array(start_date, end_date)
+        assert len(result) == expected_days
+        assert result[0] == date(year, 1, 1)
+        assert result[-1] == date(year, 12, 31)
+
+
 class TestFormatYearMonth:
     """Test cases for format_year_month function using fixtures and parametrization."""
 
