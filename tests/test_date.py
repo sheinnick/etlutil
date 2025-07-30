@@ -5,6 +5,7 @@ import pytest
 from etlutil.date import format_year_month, generate_date_array
 
 
+# ==================== FIXTURES ====================
 @pytest.fixture
 def sample_dates():
     """Common date fixtures for testing."""
@@ -32,9 +33,11 @@ def expected_results():
     }
 
 
+# ==================== GENERATE_DATE_ARRAY TESTS ====================
 class TestGenerateDateArray:
     """Test cases for generate_date_array function using fixtures and parametrization."""
 
+    # ==================== BASIC FUNCTIONALITY ====================
     def test_basic_date_range(self, sample_dates, expected_results):
         """Test basic date range with default parameters."""
         result = generate_date_array(sample_dates["start_date"], sample_dates["end_date"])
@@ -50,6 +53,7 @@ class TestGenerateDateArray:
         result = generate_date_array("2024-01-01", date(2024, 1, 3))
         assert result == expected_results["three_days"]
 
+    # ==================== INTERVAL TYPES ====================
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
@@ -70,6 +74,7 @@ class TestGenerateDateArray:
         result = generate_date_array(sample_dates["year_start"], sample_dates["year_end"], 1, "YEAR")
         assert result == expected_results["year_range"]
 
+    # ==================== EDGE CASES ====================
     @pytest.mark.parametrize(
         "start_date, end_date, expected",
         [
@@ -92,6 +97,7 @@ class TestGenerateDateArray:
         with pytest.raises(ValueError):
             generate_date_array("invalid-date", sample_dates["end_date"])
 
+    # ==================== LEAP YEAR HANDLING ====================
     def test_leap_year_handling(self, sample_dates, expected_results):
         """Test handling of leap years."""
         result = generate_date_array(sample_dates["leap_year_start"], sample_dates["leap_year_end"])
@@ -102,6 +108,7 @@ class TestGenerateDateArray:
         result = generate_date_array(sample_dates["month_end_start"], sample_dates["month_end_end"], 1, "MONTH")
         assert result == expected_results["month_end_range"]
 
+    # ==================== LARGE INTERVALS ====================
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
@@ -117,6 +124,7 @@ class TestGenerateDateArray:
         result = generate_date_array(start_date, end_date, interval, interval_type)
         assert result == expected
 
+    # ==================== NEGATIVE INTERVALS ====================
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
@@ -146,8 +154,7 @@ class TestGenerateDateArray:
         result = generate_date_array(start_date, end_date, interval, interval_type)
         assert result == expected
 
-
-    # leap_year_full_range
+    # ==================== FULL YEAR RANGE TESTS ====================
     def test_leap_year_full_range(self):
         """Test that leap year (2024) has exactly 366 days from start to end."""
         result = generate_date_array("2024-01-01", "2024-12-31")
@@ -183,9 +190,11 @@ class TestGenerateDateArray:
         assert result[-1] == date(year, 12, 31)
 
 
+# ==================== FORMAT_YEAR_MONTH TESTS ====================
 class TestFormatYearMonth:
     """Test cases for format_year_month function using fixtures and parametrization."""
 
+    # ==================== FIXTURES ====================
     @pytest.fixture
     def sample_dates_for_formatting(self):
         """Sample dates for formatting tests."""
@@ -212,6 +221,7 @@ class TestFormatYearMonth:
             "middle_day": "2024-08",
         }
 
+    # ==================== BASIC FUNCTIONALITY ====================
     def test_basic_date_object(self, sample_dates_for_formatting, expected_formatted_results):
         """Test with date object."""
         result = format_year_month(sample_dates_for_formatting["basic_date"])
@@ -222,6 +232,7 @@ class TestFormatYearMonth:
         result = format_year_month("2024-03-16")
         assert result == expected_formatted_results["basic"]
 
+    # ==================== MONTH FORMATTING ====================
     def test_single_digit_month(self, sample_dates_for_formatting, expected_formatted_results):
         """Test with single digit month (should add leading zero)."""
         result = format_year_month(sample_dates_for_formatting["single_digit_month"])
@@ -244,6 +255,7 @@ class TestFormatYearMonth:
         result = format_year_month(input_date)
         assert result == expected
 
+    # ==================== EDGE CASES ====================
     @pytest.mark.parametrize(
         "input_date, expected",
         [
@@ -257,6 +269,7 @@ class TestFormatYearMonth:
         result = format_year_month(input_date)
         assert result == expected
 
+    # ==================== FEBRUARY HANDLING ====================
     def test_leap_year_february(self, sample_dates_for_formatting, expected_formatted_results):
         """Test February in leap year."""
         result = format_year_month(sample_dates_for_formatting["leap_year_feb"])
@@ -280,6 +293,7 @@ class TestFormatYearMonth:
         result = format_year_month(date_string)
         assert result == expected
 
+    # ==================== ERROR HANDLING ====================
     @pytest.mark.parametrize(
         "invalid_date",
         [
