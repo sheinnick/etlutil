@@ -57,12 +57,49 @@ class TestGenerateDateArray:
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
-            ("2024-01-01", "2024-01-10", 2, "DAY", [date(2024, 1, 1), date(2024, 1, 3), date(2024, 1, 5), date(2024, 1, 7), date(2024, 1, 9)]),
-            ("2024-01-01", "2024-01-22", 1, "WEEK", [date(2024, 1, 1), date(2024, 1, 8), date(2024, 1, 15), date(2024, 1, 22)]),
-            ("2024-01-01", "2024-06-01", 1, "MONTH", [date(2024, 1, 1), date(2024, 2, 1), date(2024, 3, 1), date(2024, 4, 1), date(2024, 5, 1), date(2024, 6, 1)]),
-            ("2024-01-01", "2024-12-01", 1, "QUARTER", [date(2024, 1, 1), date(2024, 4, 1), date(2024, 7, 1), date(2024, 10, 1)]),
-            ("2024-01-01", "2024-07-01", 2, "MONTH", [date(2024, 1, 1), date(2024, 3, 1), date(2024, 5, 1), date(2024, 7, 1)]),
-        ]
+            (
+                "2024-01-01",
+                "2024-01-10",
+                2,
+                "DAY",
+                [date(2024, 1, 1), date(2024, 1, 3), date(2024, 1, 5), date(2024, 1, 7), date(2024, 1, 9)],
+            ),
+            (
+                "2024-01-01",
+                "2024-01-22",
+                1,
+                "WEEK",
+                [date(2024, 1, 1), date(2024, 1, 8), date(2024, 1, 15), date(2024, 1, 22)],
+            ),
+            (
+                "2024-01-01",
+                "2024-06-01",
+                1,
+                "MONTH",
+                [
+                    date(2024, 1, 1),
+                    date(2024, 2, 1),
+                    date(2024, 3, 1),
+                    date(2024, 4, 1),
+                    date(2024, 5, 1),
+                    date(2024, 6, 1),
+                ],
+            ),
+            (
+                "2024-01-01",
+                "2024-12-01",
+                1,
+                "QUARTER",
+                [date(2024, 1, 1), date(2024, 4, 1), date(2024, 7, 1), date(2024, 10, 1)],
+            ),
+            (
+                "2024-01-01",
+                "2024-07-01",
+                2,
+                "MONTH",
+                [date(2024, 1, 1), date(2024, 3, 1), date(2024, 5, 1), date(2024, 7, 1)],
+            ),
+        ],
     )
     def test_interval_types(self, start_date, end_date, interval, interval_type, expected):
         """Test different interval types with parametrization."""
@@ -80,7 +117,7 @@ class TestGenerateDateArray:
         [
             ("2024-01-05", "2024-01-01", []),  # Empty range
             ("2024-01-01", "2024-01-01", [date(2024, 1, 1)]),  # Single date
-        ]
+        ],
     )
     def test_edge_cases(self, start_date, end_date, expected):
         """Test edge cases with parametrization."""
@@ -112,12 +149,28 @@ class TestGenerateDateArray:
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
-            ("2024-01-01", "2024-12-31", 30, "DAY", [
-                date(2024, 1, 1), date(2024, 1, 31), date(2024, 3, 1), date(2024, 3, 31),
-                date(2024, 4, 30), date(2024, 5, 30), date(2024, 6, 29), date(2024, 7, 29),
-                date(2024, 8, 28), date(2024, 9, 27), date(2024, 10, 27), date(2024, 11, 26), date(2024, 12, 26)
-            ]),
-        ]
+            (
+                "2024-01-01",
+                "2024-12-31",
+                30,
+                "DAY",
+                [
+                    date(2024, 1, 1),
+                    date(2024, 1, 31),
+                    date(2024, 3, 1),
+                    date(2024, 3, 31),
+                    date(2024, 4, 30),
+                    date(2024, 5, 30),
+                    date(2024, 6, 29),
+                    date(2024, 7, 29),
+                    date(2024, 8, 28),
+                    date(2024, 9, 27),
+                    date(2024, 10, 27),
+                    date(2024, 11, 26),
+                    date(2024, 12, 26),
+                ],
+            ),
+        ],
     )
     def test_large_interval(self, start_date, end_date, interval, interval_type, expected):
         """Test with large interval values."""
@@ -128,14 +181,70 @@ class TestGenerateDateArray:
     @pytest.mark.parametrize(
         "start_date, end_date, interval, interval_type, expected",
         [
-            ("2024-01-05", "2024-01-01", -1, "DAY", [date(2024, 1, 5), date(2024, 1, 4), date(2024, 1, 3), date(2024, 1, 2), date(2024, 1, 1)]),
-            ("2024-01-22", "2024-01-01", -1, "WEEK", [date(2024, 1, 22), date(2024, 1, 15), date(2024, 1, 8), date(2024, 1, 1)]),
-            ("2024-06-01", "2024-01-01", -1, "MONTH", [date(2024, 6, 1), date(2024, 5, 1), date(2024, 4, 1), date(2024, 3, 1), date(2024, 2, 1), date(2024, 1, 1)]),
-            ("2024-12-01", "2024-01-01", -1, "QUARTER", [date(2024, 12, 1), date(2024, 9, 1), date(2024, 6, 1), date(2024, 3, 1)]),
-            ("2028-01-01", "2024-01-01", -1, "YEAR", [date(2028, 1, 1), date(2027, 1, 1), date(2026, 1, 1), date(2025, 1, 1), date(2024, 1, 1)]),
-            ("2024-01-10", "2024-01-01", -2, "DAY", [date(2024, 1, 10), date(2024, 1, 8), date(2024, 1, 6), date(2024, 1, 4), date(2024, 1, 2)]),
-            ("2024-12-01", "2024-01-01", -2, "MONTH", [date(2024, 12, 1), date(2024, 10, 1), date(2024, 8, 1), date(2024, 6, 1), date(2024, 4, 1), date(2024, 2, 1)]),
-        ]
+            (
+                "2024-01-05",
+                "2024-01-01",
+                -1,
+                "DAY",
+                [date(2024, 1, 5), date(2024, 1, 4), date(2024, 1, 3), date(2024, 1, 2), date(2024, 1, 1)],
+            ),
+            (
+                "2024-01-22",
+                "2024-01-01",
+                -1,
+                "WEEK",
+                [date(2024, 1, 22), date(2024, 1, 15), date(2024, 1, 8), date(2024, 1, 1)],
+            ),
+            (
+                "2024-06-01",
+                "2024-01-01",
+                -1,
+                "MONTH",
+                [
+                    date(2024, 6, 1),
+                    date(2024, 5, 1),
+                    date(2024, 4, 1),
+                    date(2024, 3, 1),
+                    date(2024, 2, 1),
+                    date(2024, 1, 1),
+                ],
+            ),
+            (
+                "2024-12-01",
+                "2024-01-01",
+                -1,
+                "QUARTER",
+                [date(2024, 12, 1), date(2024, 9, 1), date(2024, 6, 1), date(2024, 3, 1)],
+            ),
+            (
+                "2028-01-01",
+                "2024-01-01",
+                -1,
+                "YEAR",
+                [date(2028, 1, 1), date(2027, 1, 1), date(2026, 1, 1), date(2025, 1, 1), date(2024, 1, 1)],
+            ),
+            (
+                "2024-01-10",
+                "2024-01-01",
+                -2,
+                "DAY",
+                [date(2024, 1, 10), date(2024, 1, 8), date(2024, 1, 6), date(2024, 1, 4), date(2024, 1, 2)],
+            ),
+            (
+                "2024-12-01",
+                "2024-01-01",
+                -2,
+                "MONTH",
+                [
+                    date(2024, 12, 1),
+                    date(2024, 10, 1),
+                    date(2024, 8, 1),
+                    date(2024, 6, 1),
+                    date(2024, 4, 1),
+                    date(2024, 2, 1),
+                ],
+            ),
+        ],
     )
     def test_negative_intervals(self, start_date, end_date, interval, interval_type, expected):
         """Test negative intervals with parametrization."""
@@ -147,7 +256,7 @@ class TestGenerateDateArray:
         [
             ("2024-01-01", "2024-01-01", -1, "DAY", [date(2024, 1, 1)]),  # Same start and end date
             ("2024-01-01", "2024-01-05", -1, "DAY", []),  # Start date before end date with negative interval
-        ]
+        ],
     )
     def test_negative_interval_edge_cases(self, start_date, end_date, interval, interval_type, expected):
         """Test negative interval edge cases."""
@@ -178,7 +287,7 @@ class TestGenerateDateArray:
             (2023, 365),  # Regular year
             (2024, 366),  # Leap year
             (2025, 365),  # Regular year
-        ]
+        ],
     )
     def test_year_lengths(self, year, expected_days):
         """Test that different years have correct number of days."""
@@ -248,7 +357,7 @@ class TestFormatYearMonth:
         [
             (date(2023, 6, 10), "2023-06"),
             (date(2025, 11, 25), "2025-11"),
-        ]
+        ],
     )
     def test_different_years(self, input_date, expected):
         """Test with different years using parametrization."""
@@ -262,7 +371,7 @@ class TestFormatYearMonth:
             (date(2024, 5, 1), "2024-05"),  # First day of month
             (date(2024, 2, 29), "2024-02"),  # Last day of month (leap year)
             (date(2024, 8, 15), "2024-08"),  # Middle of month
-        ]
+        ],
     )
     def test_edge_cases_days(self, input_date, expected):
         """Test edge cases with different days of month."""
@@ -286,7 +395,7 @@ class TestFormatYearMonth:
             ("2024-05-01", "2024-05"),  # First day of month
             ("2024-12-31", "2024-12"),  # Last day of month
             ("2024-02-29", "2024-02"),  # Leap year February
-        ]
+        ],
     )
     def test_string_edge_cases(self, date_string, expected):
         """Test string input edge cases."""
@@ -300,7 +409,7 @@ class TestFormatYearMonth:
             "invalid-date",
             "2024-13-01",  # Invalid month
             "2024-02-30",  # Invalid day for February
-        ]
+        ],
     )
     def test_invalid_date_string(self, invalid_date):
         """Test that invalid date string raises ValueError."""
