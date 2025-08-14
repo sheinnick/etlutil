@@ -1,0 +1,43 @@
+{
+    "id": "10000004",
+    "author": {
+        "accountId": "#4682B4",
+        "emailAddress": "asd@zaq.mko",
+        "displayName": "funny panda"
+    },
+    "created": "2024-11-07T16:35:51.592+0300",
+    "items": [
+        {
+            "field": "timeestimate",
+            "fieldtype": "jira",
+            "fieldId": "timeestimate",
+            "from": null,
+            "fromString": null,
+            "to": "0",
+            "toString": "3"
+        },
+        {
+            "field": "timespent",
+            "fieldtype": "jira",
+            "fieldId": "timespent",
+            "from": null,
+            "fromString": null,
+            "to": "3600",
+            "toString": "3600"
+        },
+        {
+            "field": "WorklogId",
+            "fieldtype": "jira",
+            "from": null,
+            "fromString": null,
+            "to": "111118",
+            "toString": "111118"
+        }
+    ],
+    "project_key": "ETL",
+    "issue_key": "ETL-909",
+    "issue_id": "21314",
+    "import_uuid_generated": "fb8d3ff0-d5b7-4d13-a084-1195d7317a78",
+    "import_datetime": "2024-12-23T16:30:31.668500",
+    "import_last_days": 7
+}
