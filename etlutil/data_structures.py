@@ -221,3 +221,34 @@ def prune_data(
     return root_processed
 
 
+def walk(item: Any, path: list[Hashable] | None = None) -> None:
+    if path is None:
+        path = []
+    path_str = " > ".join(map(str, path))
+    if isinstance(item, Mapping):
+        print(f"[dict] {path_str}" if path_str else "[dict]")
+        for key, value in item.items():
+            walk(value, [*path, key])
+    elif (
+        isinstance(item, Sequence)
+        and not isinstance(item, str | bytes | bytearray)
+    ):
+        print(f"[list] {path_str}" if path_str else "[list]")
+        for index, value in enumerate(item):
+            walk(value, [*path, index])
+    elif isinstance(item, AbcSet):
+        print(f"[set] {path_str}" if path_str else "[set]")
+        for index, value in enumerate(item):
+            walk(value, [*path, index])
+    else:
+        print(f"|      {path_str}={item}")
+
+
+if __name__ == "__main__":
+    example = {
+        "a": 1,
+        "b": {"c": [10, 20, {"d": "x"}]},
+        "e": [{"f": 3}, 4],
+        "g": {1, 2},
+    }
+    walk(example)
