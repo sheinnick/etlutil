@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import pytest
 
-from etlutil import prune_data
+from etlutil import prune_data, walk
 
 
 # Basic key removal and depth
@@ -115,7 +115,6 @@ def test_root_container_type_preserved_sets(data, expected, expected_type):
     result = prune_data(data, ["secret"], remove_empty=True, max_depth=None)
     assert isinstance(result, expected_type)
     assert result == expected
-
 
 
 # Predicates and advanced filtering
@@ -262,3 +261,205 @@ def test_remove_keys_with_import_prefix(jira_item: dict):
     assert "import_uuid_generated" not in result
     assert "import_datetime" not in result
     assert "import_last_days" not in result
+
+
+# Walk function tests
+def test_walk_basic_tree_output(walk_example: dict, capsys):
+    walk(walk_example)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "[dict]" in output
+    assert "├─ a: 1" in output
+    assert "├─ e [list]" in output
+    assert "├─ b [dict]" in output
+    assert "└─ g [list]" in output
+
+
+def test_walk_with_show_types(walk_example: dict, capsys):
+    walk(walk_example, show_types=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "(int)" in output
+    assert "(str)" in output
+    # dict types are shown as [dict] not (dict)
+    assert "[dict]" in output
+
+
+def test_walk_with_show_lengths(walk_example: dict, capsys):
+    walk(walk_example, show_lengths=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "len=" in output
+    # size= is only shown for sets, but g is now a list
+    assert "len=2" in output  # for list g
+
+
+def test_walk_with_max_depth(walk_example: dict, capsys):
+    walk(walk_example, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show top level but not nested contents
+    assert "├─ e [list]" in output
+    assert "├─ b [dict]" in output
+    assert "└─ g [list]" in output
+
+    # should not show nested items
+    assert "├─ [0] [dict]" not in output
+    assert "├─ c [list]" not in output
+
+
+def test_walk_with_max_items_per_container(walk_example: dict, capsys):
+    walk(walk_example, max_items_per_container=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show only first 2 items in lists/sets
+    # Note: max_items_per_container only affects sequences and sets, not mappings
+    assert "├─ [0] [dict]" in output
+    assert "└─ [1]: 4" in output
+    # third item in list e should not appear (max_items=2 means only [0] and [1])
+    assert "├─ [2]" not in output
+
+
+def test_walk_with_quote_strings(walk_example: dict, capsys):
+    walk(walk_example, quote_strings=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert '"x"' in output  # string value should be quoted
+
+
+def test_walk_with_truncate_value_len(walk_example: dict, capsys):
+    walk(walk_example, truncate_value_len=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # long values should be truncated
+    assert "…" in output
+
+
+def test_walk_with_sort_keys(walk_example: dict, capsys):
+    walk(walk_example, sort_keys=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # keys should be sorted alphabetically
+    lines = output.split("\n")
+    key_lines = [line for line in lines if "├─ " in line or "└─ " in line]
+    key_lines = [line for line in key_lines if not line.strip().startswith("│")]
+
+    # extract keys from lines (only dict keys, not list indices)
+    keys = []
+    for line in key_lines:
+        if "├─ " in line:
+            key = line.split("├─ ")[1].split(":")[0].split(" [")[0]
+            # only include actual dict keys, not list indices like [0], [1]
+            if not key.startswith("["):
+                keys.append(key)
+        elif "└─ " in line:
+            key = line.split("└─ ")[1].split(":")[0].split(" [")[0]
+            if not key.startswith("["):
+                keys.append(key)
+
+    # check if dict keys are sorted
+    assert keys == sorted(keys)
+
+
+def test_walk_with_set_order_stable(walk_example: dict, capsys):
+    walk(walk_example, set_order="stable")
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show list items in stable order
+    assert "├─ [0]: 1" in output
+    assert "├─ [1]: 2" in output
+
+
+def test_walk_with_custom_writer(walk_example: dict):
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(walk_example, writer=custom_writer)
+
+    assert len(output_lines) > 0
+    assert any("[dict]" in line for line in output_lines)
+
+
+def test_walk_jira_item_basic(jira_item: dict, capsys):
+    walk(jira_item, max_depth=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "[dict]" in output
+    assert "├─ id: 10000004" in output
+    assert "├─ author [dict]" in output
+    assert "├─ items [list]" in output
+
+
+def test_walk_jira_item_with_show_types(jira_item: dict, capsys):
+    walk(jira_item, show_types=True, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "(str)" in output
+    assert "(int)" in output
+
+
+def test_walk_jira_item_with_show_lengths(jira_item: dict, capsys):
+    walk(jira_item, show_lengths=True, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "len=" in output
+    # size= is only shown for sets, jira_item doesn't have sets
+    assert "len=10" in output  # for root dict
+
+
+def test_walk_jira_item_max_items_limit(jira_item: dict, capsys):
+    walk(jira_item, max_items_per_container=2, max_depth=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show only first 2 items in the items list
+    # Note: max_items_per_container only affects sequences and sets, not mappings
+    assert "├─ [0] [dict]" in output
+    assert "└─ [1] [dict]" in output
+    assert "├─ [2]" not in output  # third item should not appear
+
+
+def test_walk_empty_containers():
+    empty_data = {"empty_list": [], "empty_dict": {}, "empty_set": set()}
+
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(empty_data, writer=custom_writer)
+
+    assert any("empty_list [list]" in line for line in output_lines)
+    assert any("empty_dict [dict]" in line for line in output_lines)
+    assert any("empty_set [set]" in line for line in output_lines)
+
+
+def test_walk_nested_structure():
+    nested_data = {"level1": {"level2": {"level3": [1, 2, 3]}}}
+
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(nested_data, writer=custom_writer)
+
+    # should show all levels
+    assert any("level1 [dict]" in line for line in output_lines)
+    assert any("level2 [dict]" in line for line in output_lines)
+    assert any("level3 [list]" in line for line in output_lines)
+    assert any("├─ [0]: 1" in line for line in output_lines)
