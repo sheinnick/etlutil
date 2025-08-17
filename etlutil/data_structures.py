@@ -225,6 +225,7 @@ def walk(
     item: Any,
     path: list[Hashable] | None = None,
     *,
+    print_output: bool = True,
     show_types: bool = False,
     quote_strings: bool = False,
     max_depth: int | None = None,
@@ -235,16 +236,22 @@ def walk(
     show_lengths: bool = False,
     writer: Callable[[str], None] | None = None,
     style: Literal["tree"] = "tree",
-) -> None:
+) -> Any:
     """Recursively walk through nested data structures and print them as a tree.
+
+    Always collects and returns a processed copy of the data with applied limits.
+    Optionally prints the tree structure to visualize the data hierarchy.
 
     Args:
         item: Root object to traverse (mapping/sequence/set or primitives).
         path: Current path in the structure (used internally for recursion).
+        print_output: When True, print the tree structure. When False, only return the collected object.
         show_types: When True, show type annotations like (int), (str).
         quote_strings: When True, wrap strings in quotes and escape special characters.
-        max_depth: Depth limit across containers. None means no limit.
-        max_items_per_container: Maximum items to show in sequences and sets.
+        max_depth: Depth limit across containers. None means no limit. When limit is reached,
+            containers are replaced with empty containers of the same type.
+        max_items_per_container: Maximum items to show/collect in sequences and sets.
+            Does NOT apply to mappings (all keys are always processed).
         truncate_value_len: Maximum length for string values before truncating with "…".
         sort_keys: When True, sort dictionary keys before display.
         set_order: Controls set element ordering ("sorted" or "stable").
@@ -252,9 +259,14 @@ def walk(
         writer: Custom output function (defaults to print).
         style: Output style (currently only "tree" supported).
 
+    Returns:
+        The collected object with applied depth and item limits. Collection behavior
+        mirrors printing behavior - when max_depth is reached, nested containers
+        become empty containers of the same type.
+
     Examples:
         >>> data = {"a": 1, "b": [2, 3], "c": {"d": "x"}}
-        >>> walk(data, show_types=True, show_lengths=True)
+        >>> result = walk(data, show_types=True, show_lengths=True)
         [dict len=3]
         ├─ a: 1 (int)
         ├─ b [list len=2]
@@ -262,6 +274,13 @@ def walk(
         │  └─ [1]: 3 (int)
         └─ c [dict len=1]
            └─ d: x (str)
+        >>> result
+        {'a': 1, 'b': [2, 3], 'c': {'d': 'x'}}
+
+        >>> # Collect object without printing
+        >>> result = walk(data, print_output=False, max_items_per_container=2)
+        >>> result
+        {'a': 1, 'b': [2, 3], 'c': {'d': 'x'}}
 
         >>> # More complex example with nested structures
         >>> complex_data = {
@@ -280,24 +299,152 @@ def walk(
     """
     if path is None:
         path = []
-    if writer is None:
-        writer = print
-    _print_tree(
+
+    # STEP 1: Always collect processed data first
+    # This creates a new data structure with applied limits (max_depth, max_items_per_container)
+    # Collection behavior mirrors printing behavior for consistency
+    collected_data = _collect_data(
         item,
-        path,
-        prefix="",
-        is_root=True,
-        writer=writer,
-        show_types=show_types,
+        max_depth=max_depth,
+        max_items_per_container=max_items_per_container,
         sort_keys=sort_keys,
         set_order=set_order,
-        max_depth=max_depth,
-        max_items=max_items_per_container,
-        show_lengths=show_lengths,
-        quote_strings=quote_strings,
-        truncate_value_len=truncate_value_len,
     )
-    return
+
+    # STEP 2: Optionally print tree visualization
+    # Uses original data (not collected) to show full structure within limits
+    # This is a separate traversal for better code clarity and testability
+    if print_output:
+        if writer is None:
+            writer = print
+        _print_tree(
+            item,  # Note: uses original item, not collected_data
+            path,
+            prefix="",
+            is_root=True,
+            writer=writer,
+            show_types=show_types,
+            sort_keys=sort_keys,
+            set_order=set_order,
+            max_depth=max_depth,
+            max_items=max_items_per_container,
+            show_lengths=show_lengths,
+            quote_strings=quote_strings,
+            truncate_value_len=truncate_value_len,
+        )
+
+    # STEP 3: Always return the processed data structure
+    # This enables programmatic use and saving to files
+    return collected_data
+
+
+def _collect_data(
+    obj: Any,
+    *,
+    max_depth: int | None,
+    max_items_per_container: int | None,
+    sort_keys: bool,
+    set_order: Literal["sorted", "stable"],
+    depth: int = 0,
+) -> Any:
+    """Collect data from nested structures with depth and item limits."""
+    # DEPTH LIMIT CHECK: Stop recursion and return empty containers
+    # This mirrors the printing behavior - when max_depth is reached,
+    # we show container type but not its contents
+    if max_depth is not None and depth >= max_depth:
+        # Return empty container of same type to preserve structure info
+        if isinstance(obj, Mapping):
+            return {}  # Empty dict preserves mapping structure
+        elif isinstance(obj, Sequence) and not isinstance(obj, str | bytes | bytearray):
+            return [] if isinstance(obj, list) else ()  # Preserve list vs tuple
+        elif isinstance(obj, AbcSet):
+            return set() if isinstance(obj, set) else frozenset()  # Preserve set vs frozenset
+        else:
+            return obj  # Primitives returned as-is
+
+    # MAPPING BRANCH: Process all keys (ignore max_items_per_container)
+    # Rationale: Dict keys are usually important metadata, unlike sequence elements
+    if isinstance(obj, Mapping):
+        result = {}
+        # Get all children with max_items=None to process every key
+        children = _children_with_labels(obj, sort_keys=sort_keys, set_order=set_order, max_items=None)
+        for label, child in children:
+            # Recursively process nested containers, keep primitives as-is
+            if isinstance(child, Mapping | Sequence | AbcSet) and not isinstance(child, str | bytes | bytearray):
+                result[label] = _collect_data(
+                    child,
+                    max_depth=max_depth,
+                    max_items_per_container=max_items_per_container,
+                    sort_keys=sort_keys,
+                    set_order=set_order,
+                    depth=depth + 1,  # Increment depth for nested containers
+                )
+            else:
+                result[label] = child  # Primitives and strings copied directly
+        return result
+
+    # SEQUENCE BRANCH: Apply max_items_per_container limit
+    # Unlike mappings, sequences can be safely truncated for performance/readability
+    elif _is_sequence(obj):
+        result_list = []
+        # Apply item limit here - only process first N elements
+        children = _children_with_labels(
+            obj, sort_keys=sort_keys, set_order=set_order, max_items=max_items_per_container
+        )
+        for _, child in children:  # Note: label (index) not used in collection
+            # Recursively process nested containers, keep primitives as-is
+            if isinstance(child, Mapping | Sequence | AbcSet) and not isinstance(child, str | bytes | bytearray):
+                result_list.append(
+                    _collect_data(
+                        child,
+                        max_depth=max_depth,
+                        max_items_per_container=max_items_per_container,
+                        sort_keys=sort_keys,
+                        set_order=set_order,
+                        depth=depth + 1,  # Increment depth for nested containers
+                    )
+                )
+            else:
+                result_list.append(child)  # Primitives and strings copied directly
+
+        # Preserve original sequence type: list vs tuple
+        if isinstance(obj, tuple):
+            return tuple(result_list)
+        return result_list
+
+    # SET BRANCH: Apply max_items_per_container limit with ordering control
+    # Sets are converted to ordered list internally, then back to set/frozenset
+    elif isinstance(obj, AbcSet):
+        result_set_items = []
+        # Apply item limit and ordering (sorted vs stable)
+        children = _children_with_labels(
+            obj, sort_keys=sort_keys, set_order=set_order, max_items=max_items_per_container
+        )
+        for _, child in children:  # Note: label (artificial index) not used in collection
+            # Recursively process nested containers, keep primitives as-is
+            if isinstance(child, Mapping | Sequence | AbcSet) and not isinstance(child, str | bytes | bytearray):
+                result_set_items.append(
+                    _collect_data(
+                        child,
+                        max_depth=max_depth,
+                        max_items_per_container=max_items_per_container,
+                        sort_keys=sort_keys,
+                        set_order=set_order,
+                        depth=depth + 1,  # Increment depth for nested containers
+                    )
+                )
+            else:
+                result_set_items.append(child)  # Primitives and strings copied directly
+
+        # Preserve original set type: set vs frozenset
+        if isinstance(obj, frozenset):
+            return frozenset(result_set_items)
+        return set(result_set_items)
+
+    else:
+        # PRIMITIVE BRANCH: Numbers, strings, None, etc.
+        # Return as-is since no further processing needed
+        return obj
 
 
 def _is_sequence(obj: Any) -> bool:
@@ -311,41 +458,59 @@ def _children_with_labels(
     set_order: Literal["sorted", "stable"],
     max_items: int | None,
 ) -> list[tuple[str, Any]]:
+    """Extract children from containers with display labels.
+
+    Returns list of (label, child) pairs for tree display and collection.
+    Labels are keys for mappings, [0], [1] indices for sequences/sets.
+    """
+    # MAPPING: Extract key-value pairs with optional sorting
     if isinstance(obj, Mapping):
         items = list(obj.items())
         if sort_keys:
             try:
-                items = sorted(items, key=lambda kv: kv[0])
+                items = sorted(items, key=lambda kv: kv[0])  # Sort by key
             except TypeError:
-                items = sorted(items, key=lambda kv: str(kv[0]))
-        # For Mapping show all elements
+                items = sorted(items, key=lambda kv: str(kv[0]))  # Fallback to string sort
+        # Always return all mapping items (max_items ignored for mappings)
         return [(str(k), v) for k, v in items]
+
+    # SEQUENCE: Extract indexed elements with optional limiting
     if _is_sequence(obj):
-        items_seq = list(enumerate(obj))
+        items_seq = list(enumerate(obj))  # (index, value) pairs
         if max_items is not None:
-            items_seq = items_seq[:max_items]
-        return [(f"[{i}]", v) for i, v in items_seq]
+            items_seq = items_seq[:max_items]  # Apply item limit
+        return [(f"[{i}]", v) for i, v in items_seq]  # Format as [0], [1], etc.
+
+    # SET: Convert to list with ordering and optional limiting
     if isinstance(obj, AbcSet):
-        elems = list(obj)
+        elems = list(obj)  # Convert set to list for processing
         if set_order == "sorted":
             try:
-                elems = sorted(elems)
+                elems = sorted(elems)  # Sort elements if possible
             except TypeError:
-                elems = sorted(elems, key=lambda x: str(x))
+                elems = sorted(elems, key=lambda x: str(x))  # Fallback to string sort
         if max_items is not None:
-            elems = elems[:max_items]
-        return [(f"[{i}]", v) for i, v in enumerate(elems)]
+            elems = elems[:max_items]  # Apply item limit
+        return [(f"[{i}]", v) for i, v in enumerate(elems)]  # Artificial indices [0], [1], etc.
+
+    # Non-container types have no children
     return []
 
 
 def _node_tag(obj: Any, *, show_lengths: bool) -> str:
+    """Generate container type tags for tree display.
+
+    Returns tags like [dict], [list], [set] with optional length info.
+    Empty string for primitives (no tag needed).
+    """
     if isinstance(obj, Mapping):
         return "[dict]" if not show_lengths else f"[dict len={len(obj)}]"
     if _is_sequence(obj):
         return "[list]" if not show_lengths else f"[list len={len(obj)}]"
     if isinstance(obj, AbcSet):
+        # Note: "size" for sets (not "len") to match mathematical convention
         return "[set]" if not show_lengths else f"[set size={len(obj)}]"
-    return ""
+    return ""  # Primitives get no tag
 
 
 def _print_tree(
@@ -364,24 +529,38 @@ def _print_tree(
     quote_strings: bool,
     truncate_value_len: int | None,
 ) -> None:
-    depth = len(path)
-    tag = _node_tag(obj, show_lengths=show_lengths)
+    """Recursively print tree structure with ASCII art connectors."""
+    depth = len(path)  # Current nesting level
+    tag = _node_tag(obj, show_lengths=show_lengths)  # [dict], [list], etc.
+
+    # CONTAINER BRANCH: Objects with children (dict, list, set)
     if tag:
+        # Print container tag at root level
         if is_root:
             writer(tag)
+
+        # DEPTH LIMIT: Stop recursion when max_depth reached
         if max_depth is not None and depth >= max_depth:
-            return
+            return  # Show container tag but no contents
+
+        # Get children with applied limits and sorting
         children = _children_with_labels(obj, sort_keys=sort_keys, set_order=set_order, max_items=max_items)
+
+        # Print each child with appropriate tree connectors
         for idx, (label, child) in enumerate(children):
             is_last = idx == len(children) - 1
+            # Tree connectors: ├─ for middle items, └─ for last item
             connector = "└─ " if is_last else "├─ "
             child_tag = _node_tag(child, show_lengths=show_lengths)
+
+            # NESTED CONTAINER: Child has its own children
             if child_tag:
                 writer(prefix + connector + f"{label} {child_tag}")
+                # Recursive call with updated path and prefix
                 _print_tree(
                     child,
-                    [*path, label],
-                    prefix + ("   " if is_last else "│  "),
+                    [*path, label],  # Extend path with current label
+                    prefix + ("   " if is_last else "│  "),  # Adjust prefix for tree lines
                     is_root=False,
                     writer=writer,
                     show_types=show_types,
@@ -393,10 +572,13 @@ def _print_tree(
                     quote_strings=quote_strings,
                     truncate_value_len=truncate_value_len,
                 )
+            # PRIMITIVE VALUE: Child is a leaf node
             else:
                 rendered = _render_value(child, quote_strings=quote_strings, truncate_value_len=truncate_value_len)
                 suffix = f" ({type(child).__name__})" if show_types else ""
                 writer(prefix + connector + f"{label}: {rendered}{suffix}")
+
+    # PRIMITIVE BRANCH: Root object is a primitive (number, string, etc.)
     else:
         rendered = _render_value(obj, quote_strings=quote_strings, truncate_value_len=truncate_value_len)
         suffix = f" ({type(obj).__name__})" if show_types else ""
@@ -404,37 +586,48 @@ def _print_tree(
 
 
 def _render_value(value: Any, *, quote_strings: bool, truncate_value_len: int | None) -> str:
+    """Format primitive values for tree display.
+
+    Handles string escaping, quoting, and length truncation.
+    Used for leaf nodes (non-container values) in the tree.
+
+    Examples:
+        >>> _render_value("hello world", quote_strings=False, truncate_value_len=None)
+        'hello world'
+
+        >>> _render_value("hello world", quote_strings=True, truncate_value_len=None)
+        '"hello world"'
+
+        >>> _render_value("hello world", quote_strings=False, truncate_value_len=5)
+        'hello…'
+
+        >>> _render_value('text with "quotes"', quote_strings=True, truncate_value_len=None)
+        '"text with \\"quotes\\""'
+
+        >>> _render_value(42, quote_strings=False, truncate_value_len=None)
+        '42'
+
+        >>> _render_value([1, 2, 3, 4, 5], quote_strings=False, truncate_value_len=8)
+        '[1, 2, 3…'
+
+        >>> _render_value(True, quote_strings=False, truncate_value_len=None)
+        'True'
+    """
+    # STRING HANDLING: Special processing for string values
     if isinstance(value, str):
         text = value
+        # Truncate long strings with ellipsis
         if truncate_value_len is not None and truncate_value_len >= 0 and len(text) > truncate_value_len:
             text = text[:truncate_value_len] + "…"
+        # Add quotes and escape special characters if requested
         if quote_strings:
-            escaped = text.replace("\\", "\\\\").replace('"', '\\"')
+            escaped = text.replace("\\", "\\\\").replace('"', '\\"')  # Escape backslashes and quotes
             return f'"{escaped}"'
         return text
-    text = str(value)
+
+    # NON-STRING HANDLING: Convert to string representation
+    text = str(value)  # Convert any type to string (int, bool, None, etc.)
+    # Truncate long representations (e.g., long lists, large numbers)
     if truncate_value_len is not None and truncate_value_len >= 0 and len(text) > truncate_value_len:
         text = text[:truncate_value_len] + "…"
     return text
-
-
-if __name__ == "__main__":
-    example = {
-        "a": 1,
-        "e": [{"f": 3}, 4],
-        "b": {"c": [10, 20, {"d": "x"}]},
-        "g": {1, 2},
-    }
-    print("--- tree ---")
-    walk(
-        example,
-        style="tree",
-        show_types=True,
-        show_lengths=True,
-        max_depth=2,
-        max_items_per_container=None,
-        quote_strings=True,
-        truncate_value_len=None,
-        sort_keys=False,
-        set_order="sorted",
-    )

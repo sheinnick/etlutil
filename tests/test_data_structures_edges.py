@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from collections.abc import Mapping, Set as AbcSet
+from collections.abc import Mapping
+from collections.abc import Set as AbcSet
 
 import pytest
 
