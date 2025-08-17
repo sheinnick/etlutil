@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from etlutil import prune_data
+from etlutil import prune_data, walk
 
 # Property-based tests (skipped if hypothesis is not installed)
 hypothesis = pytest.importorskip("hypothesis")
@@ -169,3 +169,123 @@ def test_deterministic(data):
     r1 = prune_data(data, ["k"], remove_empty=True)
     r2 = prune_data(data, ["k"], remove_empty=True)
     assert r1 == r2
+
+
+# ============================================================================
+# Property-based tests for walk function
+# ============================================================================
+
+@given(DATA)
+def test_walk_always_returns_object(data):
+    """walk should always return an object, regardless of print_output setting."""
+    result1 = walk(data, print_output=True)
+    result2 = walk(data, print_output=False)
+    # Both should return the same collected data
+    assert result1 == result2
+
+
+@given(DATA)
+def test_walk_no_mutation_of_input(data):
+    """walk should not mutate the input data."""
+    before = deepcopy(data)
+    _ = walk(data, print_output=False, max_depth=2, max_items_per_container=5)
+    assert data == before
+
+
+@given(DATA)
+def test_walk_deterministic(data):
+    """Same inputs should yield identical outputs."""
+    r1 = walk(data, print_output=False, max_depth=3, sort_keys=True)
+    r2 = walk(data, print_output=False, max_depth=3, sort_keys=True)
+    assert r1 == r2
+
+
+@given(DATA, st.integers(min_value=0, max_value=5))
+def test_walk_max_depth_consistent(data, max_depth):
+    """Collection and printing should respect max_depth consistently."""
+    # Both should apply the same depth limits
+    collected = walk(data, print_output=False, max_depth=max_depth)
+
+    # Verify depth is respected by checking nested structure
+    def check_depth(obj, current_depth=0):
+        if current_depth >= max_depth:
+            # At max depth, containers should be empty
+            if isinstance(obj, Mapping):
+                assert obj == {}
+            elif isinstance(obj, Sequence) and not isinstance(obj, str | bytes | bytearray):
+                assert obj == [] if isinstance(obj, list) else obj == ()
+            elif isinstance(obj, AbcSet):
+                assert obj == set() if isinstance(obj, set) else obj == frozenset()
+        else:
+            # Below max depth, can recurse
+            if isinstance(obj, Mapping):
+                for v in obj.values():
+                    check_depth(v, current_depth + 1)
+            elif isinstance(obj, Sequence) and not isinstance(obj, str | bytes | bytearray):
+                for v in obj:
+                    check_depth(v, current_depth + 1)
+            elif isinstance(obj, AbcSet):
+                for v in obj:
+                    check_depth(v, current_depth + 1)
+
+    check_depth(collected)
+
+
+@given(DATA, st.integers(min_value=1, max_value=10))
+def test_walk_max_items_per_container(data, max_items):
+    """max_items_per_container should limit sequences and sets but not mappings."""
+    result = walk(data, print_output=False, max_items_per_container=max_items)
+
+    def check_limits(obj):
+        if isinstance(obj, Mapping):
+            # Mappings are not limited by max_items_per_container
+            for v in obj.values():
+                check_limits(v)
+        elif isinstance(obj, Sequence) and not isinstance(obj, str | bytes | bytearray):
+            # Sequences should be limited
+            assert len(obj) <= max_items
+            for v in obj:
+                check_limits(v)
+        elif isinstance(obj, AbcSet):
+            # Sets should be limited
+            assert len(obj) <= max_items
+            for v in obj:
+                check_limits(v)
+
+    check_limits(result)
+
+
+@given(DATA)
+def test_walk_container_types_preserved(data):
+    """Container types should be preserved during collection."""
+    result = walk(data, print_output=False)
+
+    def check_types(original, collected):
+        if type(original) is not type(collected):
+            # Only allow empty containers at depth limits
+            if isinstance(original, Mapping) and collected == {}:
+                return
+            elif isinstance(original, list) and collected == []:
+                return
+            elif isinstance(original, tuple) and collected == ():
+                return
+            elif isinstance(original, set) and collected == set():
+                return
+            elif isinstance(original, frozenset) and collected == frozenset():
+                return
+            else:
+                raise AssertionError(f"Type mismatch: {type(original)} vs {type(collected)}")
+
+        if isinstance(original, Mapping) and isinstance(collected, Mapping):
+            for k in collected.keys():
+                if k in original:
+                    check_types(original[k], collected[k])
+        elif isinstance(original, list | tuple) and isinstance(collected, list | tuple):
+            for i, v in enumerate(collected):
+                if i < len(original):
+                    check_types(original[i], v)
+        elif isinstance(original, AbcSet) and isinstance(collected, AbcSet):
+            # Sets are harder to compare element-wise due to ordering
+            pass  # Just check that both are sets of the same type
+
+    check_types(data, result)
