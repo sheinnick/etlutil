@@ -23,6 +23,17 @@ def jira_item(jira_item_session: dict) -> dict:
     return deepcopy(jira_item_session)
 
 
+@pytest.fixture(scope="session")
+def walk_example_session(fixtures_dir: Path) -> dict:
+    with (fixtures_dir / "walk_example.json").open("r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+@pytest.fixture()
+def walk_example(walk_example_session: dict) -> dict:
+    return deepcopy(walk_example_session)
+
+
 BASE_SAMPLE_DICT: dict = {
     "import_top": 1,
     "keep": 2,

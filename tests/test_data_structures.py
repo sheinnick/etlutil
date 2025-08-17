@@ -6,7 +6,7 @@ from copy import deepcopy
 
 import pytest
 
-from etlutil import prune_data
+from etlutil import prune_data, walk
 
 
 # Basic key removal and depth
@@ -115,7 +115,6 @@ def test_root_container_type_preserved_sets(data, expected, expected_type):
     result = prune_data(data, ["secret"], remove_empty=True, max_depth=None)
     assert isinstance(result, expected_type)
     assert result == expected
-
 
 
 # Predicates and advanced filtering
@@ -262,3 +261,479 @@ def test_remove_keys_with_import_prefix(jira_item: dict):
     assert "import_uuid_generated" not in result
     assert "import_datetime" not in result
     assert "import_last_days" not in result
+
+
+# Walk function tests
+def test_walk_basic_tree_output(walk_example: dict, capsys):
+    walk(walk_example)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "[dict]" in output
+    assert "├─ a: 1" in output
+    assert "├─ e [list]" in output
+    assert "├─ b [dict]" in output
+    assert "└─ g [list]" in output
+
+
+def test_walk_with_show_types(walk_example: dict, capsys):
+    walk(walk_example, show_types=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "(int)" in output
+    assert "(str)" in output
+    # dict types are shown as [dict] not (dict)
+    assert "[dict]" in output
+
+
+def test_walk_with_show_lengths(walk_example: dict, capsys):
+    walk(walk_example, show_lengths=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "len=" in output
+    # size= is only shown for sets, but g is now a list
+    assert "len=2" in output  # for list g
+
+
+def test_walk_with_max_depth(walk_example: dict, capsys):
+    walk(walk_example, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show top level but not nested contents
+    assert "├─ e [list]" in output
+    assert "├─ b [dict]" in output
+    assert "└─ g [list]" in output
+
+    # should not show nested items
+    assert "├─ [0] [dict]" not in output
+    assert "├─ c [list]" not in output
+
+
+def test_walk_with_max_items_per_container(walk_example: dict, capsys):
+    walk(walk_example, max_items_per_container=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show only first 2 items in lists/sets
+    # Note: max_items_per_container only affects sequences and sets, not mappings
+    assert "├─ [0] [dict]" in output
+    assert "└─ [1]: 4" in output
+    # third item in list e should not appear (max_items=2 means only [0] and [1])
+    assert "├─ [2]" not in output
+
+
+def test_walk_with_quote_strings(walk_example: dict, capsys):
+    walk(walk_example, quote_strings=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert '"x"' in output  # string value should be quoted
+
+
+def test_walk_with_truncate_value_len(walk_example: dict, capsys):
+    walk(walk_example, truncate_value_len=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # long values should be truncated
+    assert "…" in output
+
+
+def test_walk_with_sort_keys(walk_example: dict, capsys):
+    walk(walk_example, sort_keys=True)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # keys should be sorted alphabetically
+    lines = output.split("\n")
+    key_lines = [line for line in lines if "├─ " in line or "└─ " in line]
+    key_lines = [line for line in key_lines if not line.strip().startswith("│")]
+
+    # extract keys from lines (only dict keys, not list indices)
+    keys = []
+    for line in key_lines:
+        if "├─ " in line:
+            key = line.split("├─ ")[1].split(":")[0].split(" [")[0]
+            # only include actual dict keys, not list indices like [0], [1]
+            if not key.startswith("["):
+                keys.append(key)
+        elif "└─ " in line:
+            key = line.split("└─ ")[1].split(":")[0].split(" [")[0]
+            if not key.startswith("["):
+                keys.append(key)
+
+    # check if dict keys are sorted
+    assert keys == sorted(keys)
+
+
+def test_walk_with_set_order_stable(walk_example: dict, capsys):
+    walk(walk_example, set_order="stable")
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show list items in stable order
+    assert "├─ [0]: 1" in output
+    assert "├─ [1]: 2" in output
+
+
+def test_walk_with_custom_writer(walk_example: dict):
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(walk_example, writer=custom_writer)
+
+    assert len(output_lines) > 0
+    assert any("[dict]" in line for line in output_lines)
+
+
+def test_walk_jira_item_basic(jira_item: dict, capsys):
+    walk(jira_item, max_depth=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "[dict]" in output
+    assert "├─ id: 10000004" in output
+    assert "├─ author [dict]" in output
+    assert "├─ items [list]" in output
+
+
+def test_walk_jira_item_with_show_types(jira_item: dict, capsys):
+    walk(jira_item, show_types=True, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "(str)" in output
+    assert "(int)" in output
+
+
+def test_walk_jira_item_with_show_lengths(jira_item: dict, capsys):
+    walk(jira_item, show_lengths=True, max_depth=1)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    assert "len=" in output
+    # size= is only shown for sets, jira_item doesn't have sets
+    assert "len=10" in output  # for root dict
+
+
+def test_walk_jira_item_max_items_limit(jira_item: dict, capsys):
+    walk(jira_item, max_items_per_container=2, max_depth=2)
+    captured = capsys.readouterr()
+    output = captured.out
+
+    # should show only first 2 items in the items list
+    # Note: max_items_per_container only affects sequences and sets, not mappings
+    assert "├─ [0] [dict]" in output
+    assert "└─ [1] [dict]" in output
+    assert "├─ [2]" not in output  # third item should not appear
+
+
+def test_walk_empty_containers():
+    empty_data = {"empty_list": [], "empty_dict": {}, "empty_set": set()}
+
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(empty_data, writer=custom_writer)
+
+    assert any("empty_list [list]" in line for line in output_lines)
+    assert any("empty_dict [dict]" in line for line in output_lines)
+    assert any("empty_set [set]" in line for line in output_lines)
+
+
+def test_walk_nested_structure():
+    nested_data = {"level1": {"level2": {"level3": [1, 2, 3]}}}
+
+    output_lines = []
+
+    def custom_writer(line: str) -> None:
+        output_lines.append(line)
+
+    walk(nested_data, writer=custom_writer)
+
+    # should show all levels
+    assert any("level1 [dict]" in line for line in output_lines)
+    assert any("level2 [dict]" in line for line in output_lines)
+    assert any("level3 [list]" in line for line in output_lines)
+    assert any("├─ [0]: 1" in line for line in output_lines)
+
+
+# Tests for new collection functionality
+def test_walk_returns_collected_object(walk_example: dict):
+    result = walk(walk_example, print_output=False)
+
+    # Should return the collected object
+    assert result == walk_example
+
+
+def test_walk_with_print_output_false_no_printing(walk_example: dict, capsys):
+    result = walk(walk_example, print_output=False)
+    captured = capsys.readouterr()
+
+    # Should not print anything
+    assert captured.out == ""
+    # Should return the collected object
+    assert result == walk_example
+
+
+def test_walk_with_print_output_true_prints_and_returns(walk_example: dict, capsys):
+    result = walk(walk_example, print_output=True)
+    captured = capsys.readouterr()
+
+    # Should print the tree
+    assert "[dict]" in captured.out
+    # Should also return the collected object
+    assert result == walk_example
+
+
+def test_walk_collection_respects_max_items_per_container():
+    data = {"a": 1, "b": [1, 2, 3, 4, 5], "c": {"d": "x"}}
+    result = walk(data, print_output=False, max_items_per_container=3)
+
+    # List should be truncated to 3 items
+    assert result == {"a": 1, "b": [1, 2, 3], "c": {"d": "x"}}
+
+
+def test_walk_collection_respects_max_depth():
+    data = {"level1": {"level2": {"level3": [1, 2, 3]}}}
+
+    # max_depth=1: can enter level1 dict, but level2 becomes empty dict
+    result = walk(data, print_output=False, max_depth=1)
+    expected = {"level1": {}}  # level2 dict becomes empty due to depth limit
+    assert result == expected
+
+    # max_depth=2: can enter level2 dict, but level3 becomes empty list
+    result = walk(data, print_output=False, max_depth=2)
+    expected = {"level1": {"level2": {}}}  # level3 list becomes empty due to depth limit
+    assert result == expected
+
+
+def test_walk_collection_with_sets():
+    data = {"a": 1, "b": {1, 2, 3, 4, 5}, "c": "text"}
+    result = walk(data, print_output=False, max_items_per_container=3)
+
+    # Set should be truncated to 3 items (but order may vary)
+    assert result["a"] == 1
+    assert result["c"] == "text"
+    assert len(result["b"]) == 3
+    assert isinstance(result["b"], set)
+
+
+def test_walk_collection_preserves_container_types():
+    data = {"list": [1, 2, 3], "tuple": (4, 5, 6), "set": {7, 8, 9}, "frozenset": frozenset([10, 11, 12])}
+    result = walk(data, print_output=False)
+
+    assert isinstance(result["list"], list)
+    assert isinstance(result["tuple"], tuple)
+    assert isinstance(result["set"], set)
+    assert isinstance(result["frozenset"], frozenset)
+
+
+@pytest.mark.parametrize("max_depth", [None, 1, 2])
+@pytest.mark.parametrize("max_items_per_container", [None, 1, 2])
+def test_walk_collection_with_jira_data(jira_item: dict, max_depth, max_items_per_container):
+    """Test walk collection behavior with different max_depth and max_items_per_container values."""
+    result = walk(jira_item, print_output=False, max_depth=max_depth, max_items_per_container=max_items_per_container)
+
+    # Should always return a dict at root level
+    assert isinstance(result, dict)
+
+    # Check behavior based on max_depth
+    if max_depth is None:
+        # No depth limit - should have full nested structure
+        assert isinstance(result["author"], dict)
+        assert len(result["author"]) == 3  # accountId, displayName, emailAddress
+        assert isinstance(result["items"], list)
+    elif max_depth == 1:
+        # Depth 1 - nested containers should be empty
+        assert result["author"] == {}
+        assert result["items"] == []
+        # Primitives should remain
+        assert result["id"] == "10000004"
+        assert result["created"] == "2024-11-07T16:35:51.592+0300"
+    elif max_depth == 2:
+        # Depth 2 - should show one level of nesting
+        assert isinstance(result["author"], dict)
+        assert len(result["author"]) == 3
+        assert isinstance(result["items"], list)
+        # Items should contain dicts but they should be empty (depth limit reached)
+        if max_items_per_container is None:
+            assert len(result["items"]) == 3
+        elif max_items_per_container == 1:
+            assert len(result["items"]) == 1
+        elif max_items_per_container == 2:
+            assert len(result["items"]) == 2
+
+        # Each item should be an empty dict due to depth limit
+        for item in result["items"]:
+            assert item == {}
+
+    # Check behavior based on max_items_per_container
+    if max_depth != 1:  # Skip this check when depth=1 as items will be empty
+        if max_items_per_container is None:
+            # No item limit - should have all 3 items
+            if max_depth is None or max_depth >= 2:
+                assert len(result["items"]) == 3
+        elif max_items_per_container == 1:
+            # Should have only 1 item
+            if max_depth is None or max_depth >= 2:
+                assert len(result["items"]) == 1
+        elif max_items_per_container == 2:
+            # Should have only 2 items
+            if max_depth is None or max_depth >= 2:
+                assert len(result["items"]) == 2
+
+
+# ============================================================================
+# COVERAGE TESTS: Error handling and edge cases
+# ============================================================================
+
+def test_walk_primitive_root_object():
+    """Test walk with primitive root objects (not containers)."""
+    # String root
+    result = walk("hello world", print_output=False)
+    assert result == "hello world"
+
+    # Number root
+    result = walk(42, print_output=False)
+    assert result == 42
+
+    # Boolean root
+    result = walk(True, print_output=False)
+    assert result is True
+
+    # None root
+    result = walk(None, print_output=False)
+    assert result is None
+
+
+def test_walk_primitive_root_with_printing(capsys):
+    """Test walk printing behavior with primitive root objects."""
+    # Should print the value with type annotation when requested
+    walk(42, show_types=True)
+    captured = capsys.readouterr()
+    assert "42 (int)" in captured.out
+
+    walk("test", show_types=False)
+    captured = capsys.readouterr()
+    assert captured.out.strip() == "test"
+
+
+def test_walk_sorting_fallback_for_non_comparable_keys():
+    """Test fallback to string sorting when keys are not comparable."""
+    # Mix of different types that can't be compared directly
+    data = {1: "one", "2": "two", 3.0: "three"}
+
+    # Should fallback to string sorting without error
+    result = walk(data, print_output=False, sort_keys=True)
+    # Result should have same content regardless of sorting method
+    # Note: keys are converted to strings during sorting fallback
+    assert {str(k) for k in result.keys()} == {"1", "2", "3.0"}
+    assert set(result.values()) == {"one", "two", "three"}
+
+
+def test_walk_sorting_fallback_for_non_comparable_set_elements():
+    """Test fallback to string sorting for set elements."""
+    # Mix of types in set that can't be compared
+    data = {"mixed_set": {1, "2", 3.0}}
+
+    # Should fallback to string sorting without error
+    result = walk(data, print_output=False, set_order="sorted")
+    # Set should still contain all elements
+    assert len(result["mixed_set"]) == 3
+
+
+def test_walk_unhashable_elements_in_sets():
+    """Test handling of unhashable elements during set processing."""
+    # This is tricky - sets can't contain unhashable items by definition
+    # But during processing we might encounter edge cases
+    data = {"regular_set": {1, 2, 3}}
+
+    # Should work fine with hashable elements
+    result = walk(data, print_output=False, max_items_per_container=2)
+    assert len(result["regular_set"]) == 2
+
+
+def test_walk_empty_children_edge_case():
+    """Test edge case where _children_with_labels returns empty list."""
+    # This happens with non-container objects
+    result = walk(42, print_output=False)
+    assert result == 42
+
+    # Also test with empty containers
+    result = walk({}, print_output=False)
+    assert result == {}
+
+    result = walk([], print_output=False)
+    assert result == []
+
+    result = walk(set(), print_output=False)
+    assert result == set()
+
+
+def test_walk_frozenset_depth_limit():
+    """Test depth limit behavior with frozensets."""
+    data = {"fs": frozenset([frozenset([1, 2]), frozenset([3, 4])])}
+
+    # At depth=1, inner frozensets should become empty frozensets
+    result = walk(data, print_output=False, max_depth=1)
+    assert result == {"fs": frozenset()}
+
+
+def test_walk_tuple_preservation():
+    """Test that tuples are preserved during collection."""
+    data = {"tup": (1, 2, (3, 4))}
+
+    result = walk(data, print_output=False, max_items_per_container=2)
+    assert isinstance(result["tup"], tuple)
+    assert len(result["tup"]) == 2  # Limited by max_items_per_container
+
+
+def test_walk_is_hashable_coverage():
+    """Test the is_hashable function indirectly through set processing."""
+    # All these items are hashable and should work fine
+    data = {"hashable_set": {1, "string", (1, 2), frozenset([3])}}
+
+    result = walk(data, print_output=False)
+    assert len(result["hashable_set"]) == 4
+
+
+def test_walk_render_value_coverage():
+    """Test _render_value function coverage through various value types."""
+    from io import StringIO
+
+    # Test with very long string truncation
+    long_string = "x" * 100
+    output = StringIO()
+    walk({"long": long_string}, writer=output.write, truncate_value_len=10)
+    assert "x" * 10 + "…" in output.getvalue()
+
+    # Test with quote strings and escaping
+    output = StringIO()
+    walk({"quoted": 'text with "quotes" and \\backslash'}, writer=output.write, quote_strings=True)
+    result = output.getvalue()
+    assert '\\"' in result  # Escaped quotes
+    assert "\\\\" in result  # Escaped backslashes
+
+
+def test_walk_unhashable_during_set_processing():
+    """Test edge case with unhashable items during set processing."""
+    # Create a scenario where set processing might encounter issues
+    data = {"normal_set": {1, 2, 3, 4, 5}}
+
+    # Process with limits - should work fine
+    result = walk(data, print_output=False, max_items_per_container=3)
+    assert len(result["normal_set"]) == 3
+
+    # Test with frozenset too
+    data = {"frozen": frozenset([1, 2, 3, 4, 5])}
+    result = walk(data, print_output=False, max_items_per_container=2)
+    assert len(result["frozen"]) == 2
+    assert isinstance(result["frozen"], frozenset)

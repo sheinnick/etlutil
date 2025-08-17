@@ -7,8 +7,10 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
 - **Date Processing**:
   - Generate date arrays similar to BigQuery's `GENERATE_DATE_ARRAY`
   - Format dates to year-month strings (`YYYY-MM` format)
- - **Data Cleaning**:
-   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
+- **Data Cleaning**:
+  - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
+- **Data Structure Visualization**:
+  - Tree-style visualization and data collection via `walk`
 
 ## Installation
 
@@ -61,11 +63,68 @@ limited = prune_data(data, keys_to_remove=["secret"], max_depth=1)
 ```
 
 Key points:
+
 - `keys_to_remove`: `Iterable[Hashable] | Callable[[Hashable], bool] | None`
 - `values_to_remove`: `Iterable[Any] | Callable[[Any], bool] | None`
 - `remove_empty=True` removes: `None`, empty string, empty containers; keeps `0` and `False`
 - `max_depth=None` no limit; `0` top-level only; `>=1` counts all container levels
 - Root container type is preserved (dict/list/tuple/set/frozenset)
+
+### Data Structure Visualization (walk)
+
+```python
+from etlutil import walk
+
+# Complex nested data
+data = {
+    "users": [
+        {"id": 1, "name": "Alice", "tags": {"admin", "active"}},
+        {"id": 2, "name": "Bob", "tags": {"user", "inactive"}}
+    ],
+    "settings": {"theme": "dark", "debug": True}
+}
+
+# 1) Print tree structure and return collected data
+result = walk(data, show_types=True, show_lengths=True)
+# Output:
+# [dict len=2]
+# ├─ settings [dict len=2]
+# │  ├─ debug: True (bool)
+# │  └─ theme: dark (str)
+# └─ users [list len=2]
+#    ├─ [0] [dict len=3]
+#    │  ├─ id: 1 (int)
+#    │  ├─ name: Alice (str)
+#    │  └─ tags [set size=2]
+#    │     ├─ [0]: active (str)
+#    │     └─ [1]: admin (str)
+#    └─ [1] [dict len=3]
+#       ├─ id: 2 (int)
+#       ├─ name: Bob (str)
+#       └─ tags [set size=2]
+#          ├─ [0]: inactive (str)
+#          └─ [1]: user (str)
+
+# 2) Collect data without printing
+collected = walk(data, print_output=False, max_depth=2)
+# Returns: processed data with depth limit applied
+
+# 3) Limit items per container (affects sequences/sets only)
+limited = walk(data, max_items_per_container=1, show_lengths=True)
+
+# 4) Control depth and collect processed structure
+processed = walk(data, max_depth=1, max_items_per_container=2)
+# Returns: {'users': [], 'settings': {}} - empty containers at depth limit
+```
+
+Key points:
+
+- **Always returns processed data** with applied limits (`max_depth`, `max_items_per_container`)
+- **Optional printing** via `print_output=True` (default) - set to `False` for silent collection
+- **Depth consistency**: collection behavior mirrors printing - containers become empty at depth limit
+- **Container-specific limits**: `max_items_per_container` affects sequences/sets, not mappings
+- **Tree visualization** with ASCII art connectors and type annotations
+- **Flexible output**: custom writer functions, sorting, truncation options
 
 ### Date Array Generation
 

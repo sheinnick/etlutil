@@ -5,7 +5,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
 Built for clarity, speed, and reuse.
 """
 
-from .data_structures import prune_data
+from .data_structures import prune_data, walk
 from .date import format_year_month, generate_date_array
 
 __version__ = "0.1.0"
@@ -18,4 +18,5 @@ __all__ = [
     "format_year_month",
     # Container helpers
     "prune_data",
+    "walk",
 ]
