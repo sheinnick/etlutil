@@ -2,12 +2,19 @@
 
 Provides `prune_data` to recursively clean common containers by removing selected keys
 at any nesting level and optionally dropping empty values/containers.
+
+Provides `walk` to recursively traverse and visualize nested data structures.
+
+Provides `move_unknown_keys_to_extra` to normalize dictionaries by moving unknown keys
+to a separate collection while preserving whitelisted keys.
 """
 
 from __future__ import annotations
 
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbcSet
+from datetime import datetime
+from enum import Enum
 from typing import Any, Literal
 
 
@@ -631,3 +638,449 @@ def _render_value(value: Any, *, quote_strings: bool, truncate_value_len: int | 
     if truncate_value_len is not None and truncate_value_len >= 0 and len(text) > truncate_value_len:
         text = text[:truncate_value_len] + "…"
     return text
+
+
+def move_unknown_keys_to_extra(
+    data: dict,
+    allowed_keys: Iterable[Hashable],
+    *,
+    extra_key: str = "extra_collected",
+) -> tuple[dict, list[str]]:
+    """Move unknown keys from dict to extra collection, keeping only whitelisted keys.
+
+    Args:
+        data: Input dictionary to normalize. Must be a dict.
+        allowed_keys: Iterable of allowed keys (whitelist). All keys converted to str.
+        extra_key: Key name for collecting extra items. Defaults to "extra_collected".
+
+    Returns:
+        Tuple of (normalized_dict, moved_keys_list).
+        - normalized_dict: New dict with whitelisted keys + extra_key if needed.
+        - moved_keys_list: List of final key names that were moved to extra.
+
+    Key collision rules:
+        - All keys normalized to str() for processing
+        - If multiple keys stringify to same name:
+          - String key keeps bare name (e.g., '1' stays '1')
+          - Non-string keys get type suffix (e.g., 1 → '1__int')
+          - If no string key exists, all get suffixes
+
+    Extra key collision handling:
+        - If extra_key exists in input, rename to f'{extra_key}_original'
+        - Cascade with _original2, _original3, etc. until free name found
+
+    Output sorting:
+        - All keys sorted lexicographically by final string names
+        - Both top-level and extra_collected contents sorted
+
+        Examples:
+        >>> data = {"id": 123, "name": "alex", "age": 30, "city": "berlin"}
+        >>> result, moved = move_unknown_keys_to_extra(data, ["id", "name"])
+        >>> result
+        {'extra_collected': {'age': 30, 'city': 'berlin'}, 'id': 123, 'name': 'alex'}
+        >>> moved
+        ['age', 'city']
+
+        >>> # Key collision example
+        >>> data = {"1": "str_val", 1: "int_val"}
+        >>> result, moved = move_unknown_keys_to_extra(data, ["1"])
+        >>> result
+        {'1': 'str_val', 'extra_collected': {'1__int': 'int_val'}}
+        >>> moved
+        ['1__int']
+    """
+    if not isinstance(data, dict):
+        raise TypeError("data must be a dict")
+
+    # Normalize allowed_keys to set of strings for consistent comparison
+    # Handle None input gracefully by treating as empty whitelist
+    allowed_str_keys = {str(k) for k in allowed_keys} if allowed_keys is not None else set()
+
+    # Step 1: Resolve key collisions after str() conversion
+    # This handles cases where different key types stringify to same name (e.g., 1 and "1")
+    resolved_keys = _resolve_key_collisions(data)
+
+    # Step 2: Handle extra_key collision BEFORE classification
+    # If extra_key already exists in data, we need to rename it to avoid overwriting
+    # Track renamed keys so they are kept on top level regardless of whitelist
+    renamed_keys: set[str] = set()
+
+    # Check if extra_key conflicts with any resolved key
+    if extra_key in resolved_keys:
+        # Rename the conflicting key to avoid collision with our collection key
+        conflicting_value = resolved_keys.pop(extra_key)
+        new_key = _resolve_extra_key_collision(resolved_keys, f"{extra_key}_original")
+        resolved_keys[new_key] = conflicting_value
+        renamed_keys.add(new_key)
+
+    # Also handle cascade collisions with _original variants
+    # This ensures that if data has "extra_collected_original", it gets renamed too
+    keys_to_rename = []
+    for key in resolved_keys:
+        if key.startswith(f"{extra_key}_original"):
+            keys_to_rename.append(key)
+
+    # Rename all conflicting _original variants to avoid nested conflicts
+    for key in keys_to_rename:
+        value = resolved_keys.pop(key)
+        new_key = _resolve_extra_key_collision(resolved_keys, key)
+        resolved_keys[new_key] = value
+        renamed_keys.add(new_key)
+
+    # Step 3: Classify keys into kept vs extra based on whitelist
+    kept_items: dict[str, Any] = {}
+    extra_items: dict[str, Any] = {}
+    moved_keys: list[str] = []
+
+    for final_key, original_value in resolved_keys.items():
+        # Renamed keys are always kept on top level, regardless of whitelist
+        # This preserves original data that had conflicting names with extra_key
+        if final_key in allowed_str_keys or final_key in renamed_keys:
+            kept_items[final_key] = original_value
+        else:
+            # Keys not in whitelist go to extra collection
+            extra_items[final_key] = original_value
+            moved_keys.append(final_key)
+
+    # Step 4: Add extra items under extra_key if needed
+    # Only create extra collection if there are items to collect and extra_key is not None
+    if extra_items and extra_key is not None:
+        kept_items[extra_key] = extra_items
+
+    # Step 5: Sort all keys lexicographically for consistent output
+    # This ensures deterministic results regardless of input dict order
+    result = {k: kept_items[k] for k in sorted(kept_items.keys())}
+
+    # Sort extra_collected contents too for consistency
+    if extra_key in result and isinstance(result[extra_key], dict):
+        result[extra_key] = {k: result[extra_key][k] for k in sorted(result[extra_key].keys())}
+
+    return result, sorted(moved_keys)
+
+
+def _resolve_key_collisions(data: dict) -> dict[str, Any]:
+    """Resolve key name collisions after str() conversion.
+
+    Key collision resolution logic:
+    1. Convert all keys to strings using str() - this can cause collisions
+       e.g., int(1), float(1.0), Decimal('1') all become '1'
+    2. Group original keys by their string representation
+    3. For each collision group:
+       - If there's a string key: it keeps the "bare" name (e.g., '1')
+       - All non-string keys get type suffix (e.g., '1__int', '1__decimal')
+       - If no string key exists: all keys get type suffixes
+    4. Process keys in deterministic order to ensure stable results
+       - Sort by string representation first
+       - Then by type priority (str first, then others alphabetically)
+
+    Examples:
+        {'1': 'str_val', 1: 'int_val'} → {'1': 'str_val', '1__int': 'int_val'}
+        {1: 'int_val', 1.0: 'float_val'} → {'1__int': 'int_val', '1__float': 'float_val'}
+
+    Returns:
+        dict mapping final_key -> original_value
+    """
+    # Group keys by their str() representation, maintaining insertion order
+    str_groups: dict[str, list[tuple[Any, Any]]] = {}  # str_name -> [(original_key, value), ...]
+
+    # Process in deterministic order to ensure stable collision resolution
+    # Sort by: 1) string representation, 2) type priority (str first), 3) type name
+    items = list(data.items())
+    items.sort(key=lambda kv: (str(kv[0]), 0 if isinstance(kv[0], str) else 1, type(kv[0]).__name__))
+
+    # Build collision groups by grouping keys with same str() representation
+    for original_key, value in items:
+        str_name = str(original_key)
+        if str_name not in str_groups:
+            str_groups[str_name] = []
+        str_groups[str_name].append((original_key, value))
+
+    resolved: dict[str, Any] = {}
+
+    # Process each collision group and apply resolution rules
+    for str_name, key_value_pairs in str_groups.items():
+        if len(key_value_pairs) == 1:
+            # No collision - use str_name as-is
+            original_key, value = key_value_pairs[0]
+            resolved[str_name] = value
+        else:
+            # Collision detected - apply priority-based resolution
+            string_key_pair = None
+            non_string_pairs = []
+
+            # Separate string keys from non-string keys
+            for original_key, value in key_value_pairs:
+                if isinstance(original_key, str):
+                    if string_key_pair is None:  # Take first string key if multiple
+                        string_key_pair = (original_key, value)
+                    else:
+                        # Multiple string keys with same str() - shouldn't happen but handle gracefully
+                        non_string_pairs.append((original_key, value))
+                else:
+                    non_string_pairs.append((original_key, value))
+
+            # Apply collision resolution rules based on string key presence
+            if string_key_pair is not None:
+                # String key gets bare name (highest priority)
+                _, value = string_key_pair
+                resolved[str_name] = value
+
+                # Non-string keys get type suffixes to avoid collision
+                for original_key, value in non_string_pairs:
+                    type_name = original_key.__class__.__name__.lower()
+                    suffixed_name = f"{str_name}__{type_name}"
+                    resolved[suffixed_name] = value
+            else:
+                # No string key - all keys get type suffixes (no "bare" owner)
+                for original_key, value in key_value_pairs:
+                    type_name = original_key.__class__.__name__.lower()
+                    suffixed_name = f"{str_name}__{type_name}"
+                    resolved[suffixed_name] = value
+
+    return resolved
+
+
+def _resolve_extra_key_collision(kept_items: dict[str, Any], base_key: str) -> str:
+    """Find a free name for base_key by cascading _original suffixes.
+
+    When extra_key conflicts with existing data, this function finds a safe alternative
+    name by trying _original, _original2, _original3, etc. until a free name is found.
+
+    Args:
+        kept_items: Dictionary to check for name conflicts
+        base_key: Preferred key name that might conflict
+
+    Returns:
+        A free key name that doesn't conflict with kept_items
+    """
+    # If no conflict, use base_key as-is
+    if base_key not in kept_items:
+        return base_key
+
+    # Find first available _original variant
+    counter = 1
+    while True:
+        suffix = "_original" if counter == 1 else f"_original{counter}"
+        candidate = f"{base_key}{suffix}"
+        if candidate not in kept_items:
+            return candidate
+        counter += 1
+
+
+class ConvertType(Enum):
+    """
+    Supported conversion types for convert_dict_types function.
+
+    Provides type-safe enum values for better IDE support and reduced typos.
+    Each enum value corresponds to a string type name used internally.
+    """
+
+    INT = "int"  # Convert to Python int
+    FLOAT = "float"  # Convert to Python float
+    BOOL = "bool"  # Convert to Python bool
+    DATE = "date"  # Convert to datetime.date object
+    DATETIME = "datetime"  # Convert to datetime.datetime object
+    TIMESTAMP = "timestamp"  # Convert unix timestamp to datetime object
+    TIMESTAMP_TO_ISO = "timestamp_to_iso"  # Convert unix timestamp to ISO string
+    STR = "str"  # Convert to Python str
+
+
+def convert_dict_types(
+    data: dict[str, Any] | list[Any],
+    type_schema: dict[str, str | ConvertType],
+    recursive: bool = False,
+    strict: bool = False,
+    empty_string_to_none: bool = False,
+    datetime_formats: list[str] | None = None,
+) -> dict[str, Any] | list[Any]:
+    """
+    Convert dictionary/list values to specified types based on schema.
+
+    This function is essential for ETL workflows where data comes with mixed types
+    (often strings from APIs/CSVs) and needs to be converted to proper Python types
+    for analysis or storage.
+
+    Args:
+        data: Input dictionary or list with mixed values
+        type_schema: Dictionary mapping field names to type names or ConvertType enums.
+                    Supported types: "int", "float", "bool", "date", "datetime",
+                    "timestamp", "timestamp_to_iso", "str"
+        recursive: If True, recursively process nested dictionaries and lists.
+                  Only processes dict and list containers, not tuples or other types.
+        strict: If True, raise exceptions on conversion errors instead of returning
+               original value. Use for data validation.
+        empty_string_to_none: If True, convert empty strings to None before type conversion.
+                             Useful when empty strings should be treated as missing values.
+        datetime_formats: Custom datetime formats to try in order. If None, uses:
+                         ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
+
+    Returns:
+        Dictionary/list with converted values. Original structure is preserved,
+        only values matching the schema are converted.
+
+    Raises:
+        ValueError: In strict mode when conversion fails (e.g., "abc" -> int)
+        TypeError: In strict mode when conversion fails
+
+    Examples:
+        >>> data = {"count": "42", "price": "3.14", "active": "true"}
+        >>> schema = {"count": "int", "price": "float", "active": "bool"}
+        >>> convert_dict_types(data, schema)
+        {"count": 42, "price": 3.14, "active": True}
+
+        >>> # Unix timestamp conversion
+        >>> data = {"created": "1735056631"}
+        >>> schema = {"created": "timestamp_to_iso"}
+        >>> convert_dict_types(data, schema)
+        {"created": "2024-12-24T20:10:31"}
+
+        >>> # Recursive processing of nested data
+        >>> data = {"items": [{"value": "100"}, {"value": "200"}]}
+        >>> schema = {"value": "int"}
+        >>> convert_dict_types(data, schema, recursive=True)
+        {"items": [{"value": 100}, {"value": 200}]}
+    """
+    # Set default datetime formats if none provided
+    if datetime_formats is None:
+        datetime_formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
+
+    if isinstance(data, dict):
+        result = {}
+        for key, value in data.items():
+            # Recursively process nested containers if requested
+            if recursive and isinstance(value, dict | list):
+                result[key] = convert_dict_types(
+                    value, type_schema, recursive, strict, empty_string_to_none, datetime_formats
+                )
+            else:
+                # Convert value if key is in schema, otherwise keep as-is
+                result[key] = _convert_value_if_needed(
+                    key, value, type_schema, strict, empty_string_to_none, datetime_formats
+                )
+        return result
+    elif isinstance(data, list):
+        if recursive:
+            # Process each list item recursively
+            return [
+                convert_dict_types(item, type_schema, recursive, strict, empty_string_to_none, datetime_formats)
+                for item in data
+            ]
+        else:
+            # Non-recursive: return list unchanged
+            return data
+    else:
+        # Not a dict or list: return unchanged
+        return data
+
+
+def _convert_value_if_needed(
+    key: str,
+    value: Any,
+    type_schema: dict[str, str | ConvertType],
+    strict: bool,
+    empty_string_to_none: bool,
+    datetime_formats: list[str],
+) -> Any:
+    """Convert value if key exists in schema, otherwise return unchanged."""
+    if key not in type_schema:
+        return value
+
+    # Extract string type name from enum if needed
+    target_type = type_schema[key]
+    if isinstance(target_type, ConvertType):
+        target_type = target_type.value
+
+    return _convert_value(value, target_type, strict, empty_string_to_none, datetime_formats)
+
+
+def _convert_value(
+    value: Any, target_type: str, strict: bool, empty_string_to_none: bool, datetime_formats: list[str]
+) -> Any:
+    """
+    Convert single value to target type.
+
+    Core conversion logic that handles all supported type transformations.
+    In non-strict mode, returns original value if conversion fails.
+    """
+    # None values are always preserved
+    if value is None:
+        return value
+
+    # Handle empty string conversion
+    if empty_string_to_none and value == "":
+        return None
+    elif not empty_string_to_none and value == "":
+        return value
+
+    def handle_error(exc: Exception) -> Any:
+        """Handle conversion errors based on strict mode."""
+        if strict:
+            raise exc
+        return value
+
+    try:
+        if target_type == "int":
+            # Handle boolean to int conversion first (True->1, False->0)
+            if isinstance(value, bool):
+                return int(value)
+            # Handle string numbers that may have decimal points
+            if isinstance(value, str) and value.replace(".", "", 1).replace("-", "", 1).isdigit():
+                return int(float(value))  # Convert via float to handle "3.14" -> 3
+            if isinstance(value, int | float):
+                return int(value)
+            return int(value)  # Fallback for other types
+
+        elif target_type == "float":
+            if isinstance(value, bool):
+                return float(value)
+            if isinstance(value, int | float | str):
+                return float(value)
+            return float(value)
+
+        elif target_type == "bool":
+            # String boolean conversion with common true/false representations
+            if isinstance(value, str):
+                return value.lower() in ("true", "1", "yes", "on")
+            # Numeric boolean conversion (0 is False, everything else is True)
+            if isinstance(value, int | float):
+                return bool(value)
+            return bool(value)
+
+        elif target_type == "date":
+            # Parse ISO date strings (YYYY-MM-DD)
+            if isinstance(value, str):
+                return datetime.strptime(value, "%Y-%m-%d").date()
+            return value
+
+        elif target_type == "datetime":
+            # Try multiple datetime formats in order
+            if isinstance(value, str):
+                for fmt in datetime_formats:
+                    try:
+                        return datetime.strptime(value, fmt)
+                    except ValueError:
+                        continue
+                raise ValueError(f"Unable to parse datetime: {value}")
+            return value
+
+        elif target_type == "timestamp":
+            # Convert unix timestamp to datetime object
+            if isinstance(value, str | int | float):
+                timestamp = float(value)
+                return datetime.fromtimestamp(timestamp)
+            return value
+
+        elif target_type == "timestamp_to_iso":
+            # Convert unix timestamp to ISO string format
+            if isinstance(value, str | int | float):
+                timestamp = float(value)
+                dt = datetime.fromtimestamp(timestamp)
+                return dt.isoformat()
+            return value
+
+        else:  # str or unknown type
+            # Default: convert to string
+            return str(value)
+
+    except (ValueError, TypeError) as e:
+        return handle_error(e)

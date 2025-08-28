@@ -8,7 +8,8 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from etlutil import prune_data, walk
+from etlutil import move_unknown_keys_to_extra, prune_data, walk
+from etlutil.data_structures import convert_dict_types
 
 # Property-based tests (skipped if hypothesis is not installed)
 hypothesis = pytest.importorskip("hypothesis")
@@ -175,6 +176,7 @@ def test_deterministic(data):
 # Property-based tests for walk function
 # ============================================================================
 
+
 @given(DATA)
 def test_walk_always_returns_object(data):
     """walk should always return an object, regardless of print_output setting."""
@@ -289,3 +291,287 @@ def test_walk_container_types_preserved(data):
             pass  # Just check that both are sets of the same type
 
     check_types(data, result)
+
+
+# ============================================================================
+# Property-based tests for move_unknown_keys_to_extra function
+# ============================================================================
+
+
+# move_unknown_keys_to_extra property-based tests
+@given(
+    data=st.dictionaries(
+        keys=st.one_of(st.text(), st.integers(), st.tuples(st.integers(), st.integers())),
+        values=st.one_of(st.text(), st.integers(), st.booleans(), st.none()),
+        min_size=0,
+        max_size=20,
+    ),
+    allowed_ratio=st.floats(min_value=0.0, max_value=1.0),
+)
+def test_move_unknown_keys_property_based(data, allowed_ratio):
+    """Property-based test for move_unknown_keys_to_extra with random data."""
+    if not data:
+        # Empty dict case
+        result, moved = move_unknown_keys_to_extra(data, [])
+        assert result == {}
+        assert moved == []
+        return
+
+    # Select random subset of keys as allowed
+    all_keys = list(data.keys())
+    num_allowed = int(len(all_keys) * allowed_ratio)
+    allowed_keys = all_keys[:num_allowed]
+
+    result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+
+    # Property 1: Result should be a dict
+    assert isinstance(result, dict)
+    assert isinstance(moved, list)
+
+    # Property 2: All allowed keys should be in result with correct values
+    for key in allowed_keys:
+        str_key = str(key)
+        # Key might have collision suffix, but original value should be preserved somewhere
+        found = False
+        for result_key, result_value in result.items():
+            if result_key == str_key or (result_key.startswith(str_key + "__") and str_key != result_key):
+                if result_value == data[key]:
+                    found = True
+                    break
+            elif result_key == "extra_collected" and isinstance(result_value, dict):
+                for extra_key, extra_value in result_value.items():
+                    if extra_key == str_key or (extra_key.startswith(str_key + "__") and str_key != extra_key):
+                        if extra_value == data[key]:
+                            found = True
+                            break
+        assert found, f"Key {key} with value {data[key]} not found in result"
+
+    # Property 3: All original values should be preserved somewhere
+    original_values = set(data.values())
+    result_values = set()
+
+    for value in result.values():
+        if isinstance(value, dict):  # extra_collected
+            result_values.update(value.values())
+        else:
+            result_values.add(value)
+
+    # All original values should be preserved (accounting for duplicates)
+    for original_value in original_values:
+        assert original_value in result_values
+
+    # Property 4: Keys should be sorted
+    if "extra_collected" in result:
+        extra_keys = list(result["extra_collected"].keys())
+        assert extra_keys == sorted(extra_keys)
+
+    top_keys = list(result.keys())
+    assert top_keys == sorted(top_keys)
+
+    # Property 5: Moved keys should be sorted
+    assert moved == sorted(moved)
+
+
+@given(
+    data=st.dictionaries(
+        keys=st.text(min_size=1, max_size=10),
+        values=st.text(),
+        min_size=1,
+        max_size=10,
+    )
+)
+def test_move_unknown_keys_deterministic(data):
+    """Property: Multiple runs should produce identical results."""
+    allowed_keys = list(data.keys())[: len(data) // 2]  # Take first half
+
+    results = []
+    for _ in range(3):
+        result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+        results.append((result, moved))
+
+    # All results should be identical
+    first_result = results[0]
+    for result in results[1:]:
+        assert result == first_result
+
+
+@given(
+    num_keys=st.integers(min_value=1, max_value=50),
+    allowed_ratio=st.floats(min_value=0.0, max_value=1.0),
+)
+def test_move_unknown_keys_scalability(num_keys, allowed_ratio):
+    """Property: Function should handle various data sizes efficiently."""
+    # Generate data with known structure
+    data = {f"key_{i}": f"value_{i}" for i in range(num_keys)}
+    num_allowed = int(num_keys * allowed_ratio)
+    allowed_keys = [f"key_{i}" for i in range(num_allowed)]
+
+    result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+
+    # Verify correct partitioning
+    expected_kept = num_allowed + (1 if num_keys > num_allowed else 0)  # +1 for extra_collected
+    expected_moved = num_keys - num_allowed
+
+    assert len(result) == expected_kept
+    assert len(moved) == expected_moved
+
+    if moved:
+        assert "extra_collected" in result
+        assert len(result["extra_collected"]) == expected_moved
+
+
+# ============================================================================
+# Property-based tests for convert_dict_types function
+# ============================================================================
+
+
+# Strategies for conversion testing
+convertible_values = st.one_of(
+    st.integers(min_value=-1000, max_value=1000),
+    st.floats(min_value=-1000.0, max_value=1000.0, allow_nan=False, allow_infinity=False),
+    st.booleans(),
+    st.text(min_size=0, max_size=20),
+    st.none(),
+)
+
+conversion_types = st.sampled_from(["int", "float", "bool", "str", "timestamp_to_iso"])
+
+schema_strategy = st.dictionaries(
+    keys=st.text(min_size=1, max_size=10), values=conversion_types, min_size=1, max_size=5
+)
+
+
+@given(
+    data=st.dictionaries(keys=st.text(min_size=1, max_size=10), values=convertible_values, min_size=1, max_size=10),
+    schema=schema_strategy,
+    recursive=st.booleans(),
+    strict=st.booleans(),
+    empty_string_to_none=st.booleans(),
+)
+def test_convert_dict_types_property_basic_invariants(data, schema, recursive, strict, empty_string_to_none):
+    """Property test: basic invariants should hold for any valid input."""
+    try:
+        result = convert_dict_types(
+            data, schema, recursive=recursive, strict=strict, empty_string_to_none=empty_string_to_none
+        )
+
+        # Basic invariants
+        assert isinstance(result, dict)
+        assert len(result) == len(data)  # Same number of keys
+
+        # All original keys should be present
+        assert set(result.keys()) == set(data.keys())
+
+        # Keys not in schema should remain unchanged (unless recursive affects them)
+        for key in data:
+            if key not in schema:
+                if not recursive or not isinstance(data[key], dict | list):
+                    assert result[key] == data[key]
+
+    except (ValueError, TypeError, OverflowError):
+        # In strict mode, conversion errors are expected for some inputs
+        if not strict:
+            # In non-strict mode, function should not raise for basic type errors
+            # (though it might for other reasons like overflow)
+            pass
+
+
+@given(
+    base_data=st.dictionaries(
+        keys=st.text(min_size=1, max_size=5), values=st.text(min_size=1, max_size=20), min_size=1, max_size=5
+    )
+)
+def test_convert_dict_types_property_string_to_int_consistency(base_data):
+    """Property test: string->int conversion should be consistent."""
+    # Filter to only numeric strings that should convert cleanly
+    numeric_data = {}
+    for key, value in base_data.items():
+        if value.isdigit() or (value.startswith("-") and value[1:].isdigit()):
+            try:
+                int(value)  # Verify it's actually convertible
+                numeric_data[key] = value
+            except ValueError:
+                continue
+
+    if not numeric_data:
+        return  # Skip if no valid numeric data
+
+    schema = dict.fromkeys(numeric_data.keys(), "int")
+
+    result = convert_dict_types(numeric_data, schema, strict=False)
+
+    # All values should be successfully converted to int
+    for key, original_value in numeric_data.items():
+        assert isinstance(result[key], int)
+        assert result[key] == int(original_value)
+
+
+@given(
+    nested_data=st.recursive(
+        st.dictionaries(
+            keys=st.text(min_size=1, max_size=5),
+            values=st.one_of(st.text(min_size=1, max_size=10), st.integers()),
+            min_size=1,
+            max_size=3,
+        ),
+        lambda children: st.dictionaries(
+            keys=st.text(min_size=1, max_size=5),
+            values=st.one_of(st.text(min_size=1, max_size=10), children),
+            min_size=1,
+            max_size=3,
+        ),
+        max_leaves=10,
+    )
+)
+def test_convert_dict_types_property_recursive_structure_preserved(nested_data):
+    """Property test: recursive conversion preserves structure."""
+    if not isinstance(nested_data, dict):
+        return
+
+    schema = {"dummy": "str"}  # Schema that won't match anything
+
+    # Non-recursive should preserve nested structure exactly
+    result_non_recursive = convert_dict_types(nested_data, schema, recursive=False)
+    assert result_non_recursive == nested_data
+
+    # Recursive should preserve structure shape (even if values change)
+    result_recursive = convert_dict_types(nested_data, schema, recursive=True)
+
+    def same_structure(a, b):
+        if type(a) is not type(b):
+            return False
+        if isinstance(a, dict):
+            return set(a.keys()) == set(b.keys()) and all(same_structure(a[k], b[k]) for k in a.keys())
+        elif isinstance(a, list):
+            return len(a) == len(b) and all(same_structure(x, y) for x, y in zip(a, b, strict=True))
+        else:
+            return True  # Leaf values may differ
+
+    assert same_structure(nested_data, result_recursive)
+
+
+@given(
+    data=st.dictionaries(
+        keys=st.text(min_size=1, max_size=5),
+        values=st.one_of(st.none(), st.text(min_size=0, max_size=10)),
+        min_size=1,
+        max_size=5,
+    ),
+    empty_string_to_none=st.booleans(),
+)
+def test_convert_dict_types_property_none_and_empty_handling(data, empty_string_to_none):
+    """Property test: None values and empty strings are handled consistently."""
+    schema = dict.fromkeys(data.keys(), "str")
+
+    result = convert_dict_types(data, schema, empty_string_to_none=empty_string_to_none)
+
+    for key, value in data.items():
+        if value is None:
+            # None should always be preserved
+            assert result[key] is None
+        elif value == "" and empty_string_to_none:
+            # Empty string should become None when flag is set
+            assert result[key] is None
+        elif value == "" and not empty_string_to_none:
+            # Empty string should be preserved when flag is not set
+            assert result[key] == ""

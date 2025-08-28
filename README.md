@@ -9,6 +9,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
   - Format dates to year-month strings (`YYYY-MM` format)
 - **Data Cleaning**:
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
+  - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
 - **Data Structure Visualization**:
   - Tree-style visualization and data collection via `walk`
 
@@ -125,6 +126,60 @@ Key points:
 - **Container-specific limits**: `max_items_per_container` affects sequences/sets, not mappings
 - **Tree visualization** with ASCII art connectors and type annotations
 - **Flexible output**: custom writer functions, sorting, truncation options
+
+### Dictionary Normalization (move_unknown_keys_to_extra)
+
+```python
+from etlutil import move_unknown_keys_to_extra
+
+# Basic whitelist filtering
+data = {"id": 123, "name": "alex", "age": 30, "city": "berlin"}
+result, moved = move_unknown_keys_to_extra(data, ["id", "name"])
+# Result: {'extra_collected': {'age': 30, 'city': 'berlin'}, 'id': 123, 'name': 'alex'}
+# Moved: ['age', 'city']
+
+# Custom extra key name
+result, moved = move_unknown_keys_to_extra(data, ["id"], extra_key="metadata")
+# Result: {'id': 123, 'metadata': {'age': 30, 'city': 'berlin', 'name': 'alex'}}
+
+# API response cleanup - keep only business fields
+api_data = {
+    "id": 123,
+    "name": "user",
+    "email": "user@example.com", 
+    "internal_id": "xyz",
+    "debug_info": {"trace": "..."},
+    "temp_session": "abc123"
+}
+
+business_fields = ["id", "name", "email"]
+clean_data, internal_fields = move_unknown_keys_to_extra(api_data, business_fields)
+# Result: clean API response with internal fields moved to 'extra_collected'
+
+# Handle key collisions (different types, same string representation)
+collision_data = {"1": "string_key", 1: "int_key"}
+result, moved = move_unknown_keys_to_extra(collision_data, ["1"])
+# Result: {'1': 'string_key', 'extra_collected': {'1__int': 'int_key'}}
+# String keys get priority, non-string keys get type suffixes
+
+# Discard extra items (don't collect them)
+result, moved = move_unknown_keys_to_extra(data, ["id", "name"], extra_key=None)
+# Result: {'id': 123, 'name': 'alex'} - age and city discarded
+
+# Handle None inputs gracefully
+result, moved = move_unknown_keys_to_extra(data, allowed_keys=None, extra_key=None)
+# Result: {} - all keys discarded when no whitelist provided
+```
+
+Key points:
+
+- **Whitelist-based filtering**: Only allowed keys remain at top level
+- **Key collision resolution**: String keys get priority, others get type suffixes (`1__int`, `1__decimal`)
+- **Extra key collision handling**: If `extra_key` exists in data, it gets renamed (`extra_collected_original`)
+- **Flexible output**: Set `extra_key=None` to discard unknown keys instead of collecting
+- **Lexicographic sorting**: All keys sorted consistently for deterministic output
+- **Immutable operation**: Original data unchanged, returns new dictionary
+- **Type conversion**: All keys converted to strings for consistent processing
 
 ### Date Array Generation
 
@@ -243,6 +298,96 @@ uv run ruff format etlutil/ tests/
 # Or run both at once
 uv run ruff check etlutil/ tests/
 ```
+
+### Type Conversion
+
+Convert dictionary values to proper Python types based on a schema. Essential for ETL workflows where data comes as strings from APIs, CSVs, or databases.
+
+```python
+from etlutil import convert_dict_types
+from etlutil.data_structures import ConvertType
+
+# Basic type conversion
+data = {"count": "42", "price": "3.14", "active": "true", "created": "2024-12-25"}
+schema = {
+    "count": "int",
+    "price": "float", 
+    "active": "bool",
+    "created": "date"
+}
+
+result = convert_dict_types(data, schema)
+# Result: {"count": 42, "price": 3.14, "active": True, "created": date(2024, 12, 25)}
+
+# Using enum types for better IDE support
+schema = {
+    "count": ConvertType.INT,
+    "price": ConvertType.FLOAT,
+    "active": ConvertType.BOOL,
+    "created": ConvertType.DATE
+}
+
+# Unix timestamp conversion
+data = {"created_at": "1735056631", "updated_at": 1735056631}
+schema = {
+    "created_at": "timestamp",        # → datetime object
+    "updated_at": "timestamp_to_iso"  # → ISO string "2024-12-24T20:10:31"
+}
+
+# Recursive processing for nested data
+nested_data = {
+    "user_id": "123",
+    "items": [
+        {"price": "29.99", "quantity": "2"},
+        {"price": "15.50", "quantity": "1"}
+    ]
+}
+
+schema = {"user_id": "int", "price": "float", "quantity": "int"}
+result = convert_dict_types(nested_data, schema, recursive=True)
+# Converts values in nested dictionaries and lists
+
+# Strict mode for validation
+try:
+    convert_dict_types({"invalid": "not_a_number"}, {"invalid": "int"}, strict=True)
+except ValueError:
+    print("Conversion failed - use for data validation")
+
+# Custom datetime formats
+data = {"event_time": "25/12/2024 15:30"}
+schema = {"event_time": "datetime"}
+custom_formats = ["%d/%m/%Y %H:%M"]
+
+result = convert_dict_types(data, schema, datetime_formats=custom_formats)
+
+# Empty string handling
+data = {"value": "", "other": "42"}
+schema = {"value": "int", "other": "int"}
+
+# Convert empty strings to None
+result = convert_dict_types(data, schema, empty_string_to_none=True)
+# Result: {"value": None, "other": 42}
+```
+
+**Supported Types:**
+
+- `"int"` - Integer conversion (handles floats, booleans, strings)
+- `"float"` - Float conversion
+- `"bool"` - Boolean conversion ("true", "1", "yes", "on" → True)
+- `"str"` - String conversion
+- `"date"` - Date objects from "YYYY-MM-DD" strings
+- `"datetime"` - Datetime objects with configurable formats
+- `"timestamp"` - Unix timestamp → datetime object
+- `"timestamp_to_iso"` - Unix timestamp → ISO string
+
+**Key Features:**
+
+- **Recursive processing** - Handle nested dictionaries and lists
+- **Strict mode** - Raise exceptions on conversion errors for validation
+- **Flexible datetime parsing** - Custom format support
+- **Empty string handling** - Convert to None when needed
+- **Type safety** - Use ConvertType enum for better IDE support
+- **Error tolerance** - Non-strict mode preserves original values on errors
 
 ## Contributing
 

@@ -3,10 +3,12 @@ from __future__ import annotations
 import re
 from collections.abc import Hashable
 from copy import deepcopy
+from datetime import date, datetime
 
 import pytest
 
-from etlutil import prune_data, walk
+from etlutil import move_unknown_keys_to_extra, prune_data, walk
+from etlutil.data_structures import ConvertType, convert_dict_types
 
 
 # Basic key removal and depth
@@ -589,3 +591,243 @@ def test_walk_collection_with_jira_data(jira_item: dict, max_depth, max_items_pe
             # Should have only 2 items
             if max_depth is None or max_depth >= 2:
                 assert len(result["items"]) == 2
+
+
+# ============================================================================
+# tests for move_unknown_keys_to_extra function
+# ============================================================================
+
+
+# move_unknown_keys_to_extra basic functionality tests
+def test_move_unknown_keys_basic():
+    """Basic whitelist filtering: keep allowed keys, move others to extra."""
+    data = {"id": 123, "name": "alex", "age": 30, "city": "berlin"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name"])
+
+    expected = {
+        "extra_collected": {"age": 30, "city": "berlin"},
+        "id": 123,
+        "name": "alex",
+    }
+    assert result == expected
+    assert set(moved) == {"age", "city"}
+
+
+def test_move_unknown_keys_all_allowed():
+    """When all keys are in whitelist, no extra_collected should be created."""
+    data = {"id": 123, "name": "alex"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name"])
+
+    assert result == {"id": 123, "name": "alex"}
+    assert moved == []
+    assert "extra_collected" not in result
+
+
+def test_move_unknown_keys_none_allowed():
+    """When no keys are in whitelist, all should go to extra_collected."""
+    data = {"id": 123, "name": "alex"}
+    result, moved = move_unknown_keys_to_extra(data, [])
+
+    expected = {"extra_collected": {"id": 123, "name": "alex"}}
+    assert result == expected
+    assert set(moved) == {"id", "name"}
+
+
+def test_move_unknown_keys_custom_extra_key():
+    """Test using custom extra_key name."""
+    data = {"id": 123, "name": "alex", "age": 30}
+    result, moved = move_unknown_keys_to_extra(data, ["id"], extra_key="metadata")
+
+    expected = {"id": 123, "metadata": {"age": 30, "name": "alex"}}
+    assert result == expected
+    assert set(moved) == {"age", "name"}
+
+
+def test_move_unknown_keys_sorting():
+    """Keys should be sorted lexicographically in output."""
+    data = {"z": 1, "a": 2, "m": 3, "b": 4}
+    result, moved = move_unknown_keys_to_extra(data, ["z"])
+
+    # Top-level keys sorted
+    assert list(result.keys()) == ["extra_collected", "z"]
+    # Extra keys also sorted
+    assert list(result["extra_collected"].keys()) == ["a", "b", "m"]
+    # Moved keys sorted
+    assert moved == ["a", "b", "m"]
+
+
+def test_move_unknown_keys_immutability():
+    """Original data should not be modified."""
+    data = {"id": 123, "name": "alex", "age": 30}
+    original = data.copy()
+    result, moved = move_unknown_keys_to_extra(data, ["id"])
+
+    # Input unchanged
+    assert data == original
+    # Result is new object
+    assert result is not data
+
+
+# ============================================================================
+# Tests for convert_dict_types function
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "input_val,target_type,expected",
+    [
+        ("42", "int", 42),
+        ("3.14", "int", 3),
+        (True, "int", 1),
+        ("3.14", "float", 3.14),
+        (42, "float", 42.0),
+        (True, "float", 1.0),
+        ("true", "bool", True),
+        ("1", "bool", True),
+        ("yes", "bool", True),
+        ("on", "bool", True),
+        ("false", "bool", False),
+        ("0", "bool", False),
+        (1, "bool", True),
+        (0, "bool", False),
+        (3.14, "bool", True),
+        ("2024-12-25", "date", date(2024, 12, 25)),
+        ("2024-12-25T15:30:45", "datetime", datetime(2024, 12, 25, 15, 30, 45)),
+        ("2024-12-25 15:30:45", "datetime", datetime(2024, 12, 25, 15, 30, 45)),
+        ("2024-12-25", "datetime", datetime(2024, 12, 25, 0, 0, 0)),
+        ("1735056631", "timestamp_to_iso", "2024-12-24T20:10:31"),
+        (1735056631, "timestamp_to_iso", "2024-12-24T20:10:31"),
+        (42, "str", "42"),
+        (True, "str", "True"),
+        (3.14, "str", "3.14"),
+    ],
+)
+def test_convert_single_value(input_val, target_type, expected):
+    """Test individual value conversions with parametrized inputs."""
+    data = {"test_key": input_val}
+    schema = {"test_key": target_type}
+
+    result = convert_dict_types(data, schema)
+
+    assert result["test_key"] == expected
+
+
+def test_convert_timestamp_to_datetime_object(conversion_data):
+    """Test timestamp conversion to datetime object."""
+    schema = {"str_timestamp": "timestamp"}
+
+    result = convert_dict_types(conversion_data, schema)
+
+    assert isinstance(result["str_timestamp"], datetime)
+    assert result["str_timestamp"] == datetime(2024, 12, 24, 20, 10, 31)
+
+
+def test_convert_with_enum_schema(conversion_data):
+    """Test conversion using ConvertType enum."""
+    schema = {
+        "str_int": ConvertType.INT,
+        "str_float": ConvertType.FLOAT,
+        "str_bool_true": ConvertType.BOOL,
+        "str_date": ConvertType.DATE,
+        "str_timestamp": ConvertType.TIMESTAMP_TO_ISO,
+    }
+
+    result = convert_dict_types(conversion_data, schema)
+
+    assert result["str_int"] == 42
+    assert result["str_float"] == 3.14
+    assert result["str_bool_true"] is True
+    assert result["str_date"] == date(2024, 12, 25)
+    assert result["str_timestamp"] == "2024-12-24T20:10:31"
+
+
+def test_convert_recursive_vs_non_recursive(nested_conversion_data):
+    """Test recursive vs non-recursive conversion modes."""
+    schema = {"top_level": "int", "inner_val": "float", "deep_val": "bool", "value": "int"}
+
+    # Non-recursive - only top level converted
+    result_simple = convert_dict_types(nested_conversion_data, schema, recursive=False)
+    assert result_simple["top_level"] == 42
+    assert result_simple["nested"]["inner_val"] == "3.14"  # Unchanged
+    assert result_simple["items"][0]["value"] == "100"  # Unchanged
+
+    # Recursive - all levels converted
+    result_recursive = convert_dict_types(nested_conversion_data, schema, recursive=True)
+    assert result_recursive["top_level"] == 42
+    assert result_recursive["nested"]["inner_val"] == 3.14  # Converted
+    assert result_recursive["nested"]["deep_nested"]["deep_val"] is True  # Converted
+    assert result_recursive["items"][0]["value"] == 100  # Converted
+    assert result_recursive["items"][2]["nested"]["value"] == 300  # Converted
+
+
+@pytest.mark.parametrize("empty_string_to_none", [True, False])
+def test_convert_empty_string_handling(conversion_data, empty_string_to_none):
+    """Test empty string handling with parametrized behavior."""
+    schema = {"empty_str": "int"}
+
+    result = convert_dict_types(conversion_data, schema, empty_string_to_none=empty_string_to_none)
+
+    if empty_string_to_none:
+        assert result["empty_str"] is None
+    else:
+        assert result["empty_str"] == ""
+
+
+def test_convert_none_values_preserved(conversion_data):
+    """Test that None values are always preserved."""
+    schema = {"none_val": "int"}
+
+    result = convert_dict_types(conversion_data, schema)
+
+    assert result["none_val"] is None
+
+
+def test_convert_unknown_keys_preserved(conversion_data):
+    """Test that keys not in schema remain unchanged."""
+    schema = {"str_int": "int"}  # Only one key in schema
+
+    result = convert_dict_types(conversion_data, schema)
+
+    assert result["str_int"] == 42  # Converted
+    assert result["str_float"] == "3.14"  # Unchanged
+    assert result["str_bool_true"] == "true"  # Unchanged
+
+
+def test_convert_custom_datetime_formats():
+    """Test custom datetime format handling."""
+    data = {"dt_custom": "25/12/2024 15:30", "dt_iso": "2024-12-25T15:30:45", "dt_standard": "2024-12-25"}
+    schema = dict.fromkeys(data.keys(), "datetime")
+    custom_formats = ["%d/%m/%Y %H:%M", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
+
+    result = convert_dict_types(data, schema, datetime_formats=custom_formats)
+
+    assert result["dt_custom"] == datetime(2024, 12, 25, 15, 30, 0)
+    assert result["dt_iso"] == datetime(2024, 12, 25, 15, 30, 45)
+    assert result["dt_standard"] == datetime(2024, 12, 25, 0, 0, 0)
+
+
+def test_convert_fb_api_like_data(fb_api_data):
+    """Test conversion of complex FB API-like data."""
+    schema = {
+        "date_start": "date",
+        "impressions": "int",
+        "spend": "float",
+        "is_active": "bool",
+        "created_timestamp": "timestamp",
+        "updated_timestamp": "timestamp_to_iso",
+        "value": "int",  # For nested conversion
+    }
+
+    # Test recursive conversion
+    result = convert_dict_types(fb_api_data, schema, recursive=True)
+
+    assert result["date_start"] == date(2025, 8, 27)
+    assert result["impressions"] == 42
+    assert result["spend"] == 0.100697
+    assert result["is_active"] is True
+    assert isinstance(result["created_timestamp"], datetime)
+    assert result["updated_timestamp"] == "2024-12-24T20:10:31"
+
+    # Check nested conversions
+    assert result["actions"][0]["value"] == 2
+    assert result["actions"][1]["value"] == 1
