@@ -307,13 +307,17 @@ def test_walk_container_types_preserved(data):
         max_size=20,
     ),
     allowed_ratio=st.floats(min_value=0.0, max_value=1.0),
+    always_add_extra=st.booleans(),
 )
-def test_move_unknown_keys_property_based(data, allowed_ratio):
+def test_move_unknown_keys_property_based(data, allowed_ratio, always_add_extra):
     """Property-based test for move_unknown_keys_to_extra with random data."""
     if not data:
         # Empty dict case
-        result, moved = move_unknown_keys_to_extra(data, [])
-        assert result == {}
+        result, moved = move_unknown_keys_to_extra(data, [], always_add_extra=always_add_extra)
+        if always_add_extra:
+            assert result == {"extra_collected": {}}
+        else:
+            assert result == {}
         assert moved == []
         return
 
@@ -322,7 +326,7 @@ def test_move_unknown_keys_property_based(data, allowed_ratio):
     num_allowed = int(len(all_keys) * allowed_ratio)
     allowed_keys = all_keys[:num_allowed]
 
-    result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+    result, moved = move_unknown_keys_to_extra(data, allowed_keys, always_add_extra=always_add_extra)
 
     # Property 1: Result should be a dict
     assert isinstance(result, dict)
@@ -371,6 +375,21 @@ def test_move_unknown_keys_property_based(data, allowed_ratio):
     # Property 5: Moved keys should be sorted
     assert moved == sorted(moved)
 
+    # Property 6: always_add_extra behavior
+    num_moved = len(moved)
+    if always_add_extra:
+        # When always_add_extra=True, extra_collected should always be present
+        assert "extra_collected" in result
+        if num_moved == 0:
+            # No moved keys -> extra_collected should be empty dict
+            assert result["extra_collected"] == {}
+    else:
+        # When always_add_extra=False (default), extra_collected only present if keys moved
+        if num_moved == 0:
+            assert "extra_collected" not in result
+        else:
+            assert "extra_collected" in result
+
 
 @given(
     data=st.dictionaries(
@@ -378,15 +397,16 @@ def test_move_unknown_keys_property_based(data, allowed_ratio):
         values=st.text(),
         min_size=1,
         max_size=10,
-    )
+    ),
+    always_add_extra=st.booleans(),
 )
-def test_move_unknown_keys_deterministic(data):
+def test_move_unknown_keys_deterministic(data, always_add_extra):
     """Property: Multiple runs should produce identical results."""
     allowed_keys = list(data.keys())[: len(data) // 2]  # Take first half
 
     results = []
     for _ in range(3):
-        result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+        result, moved = move_unknown_keys_to_extra(data, allowed_keys, always_add_extra=always_add_extra)
         results.append((result, moved))
 
     # All results should be identical
@@ -398,26 +418,80 @@ def test_move_unknown_keys_deterministic(data):
 @given(
     num_keys=st.integers(min_value=1, max_value=50),
     allowed_ratio=st.floats(min_value=0.0, max_value=1.0),
+    always_add_extra=st.booleans(),
 )
-def test_move_unknown_keys_scalability(num_keys, allowed_ratio):
+def test_move_unknown_keys_scalability(num_keys, allowed_ratio, always_add_extra):
     """Property: Function should handle various data sizes efficiently."""
     # Generate data with known structure
     data = {f"key_{i}": f"value_{i}" for i in range(num_keys)}
     num_allowed = int(num_keys * allowed_ratio)
     allowed_keys = [f"key_{i}" for i in range(num_allowed)]
 
-    result, moved = move_unknown_keys_to_extra(data, allowed_keys)
+    result, moved = move_unknown_keys_to_extra(data, allowed_keys, always_add_extra=always_add_extra)
 
     # Verify correct partitioning
-    expected_kept = num_allowed + (1 if num_keys > num_allowed else 0)  # +1 for extra_collected
-    expected_moved = num_keys - num_allowed
+    num_moved = num_keys - num_allowed
+
+    if always_add_extra:
+        # extra_collected always present
+        expected_kept = num_allowed + 1  # +1 for extra_collected
+        assert "extra_collected" in result
+        assert len(result["extra_collected"]) == num_moved
+    else:
+        # extra_collected only present if keys were moved
+        expected_kept = num_allowed + (1 if num_moved > 0 else 0)  # +1 for extra_collected if needed
+        if num_moved > 0:
+            assert "extra_collected" in result
+            assert len(result["extra_collected"]) == num_moved
+        else:
+            assert "extra_collected" not in result
 
     assert len(result) == expected_kept
-    assert len(moved) == expected_moved
+    assert len(moved) == num_moved
 
-    if moved:
-        assert "extra_collected" in result
-        assert len(result["extra_collected"]) == expected_moved
+
+@given(
+    data=st.dictionaries(
+        keys=st.text(min_size=1, max_size=5),
+        values=st.one_of(st.text(), st.integers(), st.booleans()),
+        min_size=0,
+        max_size=10,
+    ),
+    allowed_ratio=st.floats(min_value=0.0, max_value=1.0),
+)
+def test_move_unknown_keys_always_add_extra_property(data, allowed_ratio):
+    """Property test specifically for always_add_extra parameter behavior."""
+    all_keys = list(data.keys()) if data else []
+    num_allowed = int(len(all_keys) * allowed_ratio)
+    allowed_keys = all_keys[:num_allowed]
+
+    # Test both values of always_add_extra
+    result_false, moved_false = move_unknown_keys_to_extra(data, allowed_keys, always_add_extra=False)
+    result_true, moved_true = move_unknown_keys_to_extra(data, allowed_keys, always_add_extra=True)
+
+    # moved_keys should be identical regardless of always_add_extra
+    assert moved_false == moved_true
+
+    # Check extra_collected presence
+    has_moved_keys = len(moved_false) > 0
+
+    if has_moved_keys:
+        # When keys were moved, both should have extra_collected with same content
+        assert "extra_collected" in result_false
+        assert "extra_collected" in result_true
+        assert result_false["extra_collected"] == result_true["extra_collected"]
+        # Other keys should be identical
+        result_false_no_extra = {k: v for k, v in result_false.items() if k != "extra_collected"}
+        result_true_no_extra = {k: v for k, v in result_true.items() if k != "extra_collected"}
+        assert result_false_no_extra == result_true_no_extra
+    else:
+        # When no keys moved, behavior should differ based on always_add_extra
+        assert "extra_collected" not in result_false
+        assert "extra_collected" in result_true
+        assert result_true["extra_collected"] == {}
+        # Other keys should be identical
+        result_true_no_extra = {k: v for k, v in result_true.items() if k != "extra_collected"}
+        assert result_false == result_true_no_extra
 
 
 # ============================================================================

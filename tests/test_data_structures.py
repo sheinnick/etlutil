@@ -623,6 +623,31 @@ def test_move_unknown_keys_all_allowed():
     assert "extra_collected" not in result
 
 
+def test_move_unknown_keys_all_allowed_with_always_add_extra():
+    """When all keys are allowed but always_add_extra=True, extra_collected should be empty dict."""
+    data = {"id": 123, "name": "alex"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name"], always_add_extra=True)
+
+    assert result == {"extra_collected": {}, "id": 123, "name": "alex"}
+    assert moved == []
+    assert "extra_collected" in result
+    assert result["extra_collected"] == {}
+
+
+def test_move_unknown_keys_with_moves_and_always_add_extra():
+    """When always_add_extra=True and there are moved keys, extra_collected should contain them."""
+    data = {"id": 123, "name": "alex", "age": 30, "city": "berlin"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name"], always_add_extra=True)
+
+    expected = {
+        "extra_collected": {"age": 30, "city": "berlin"},
+        "id": 123,
+        "name": "alex",
+    }
+    assert result == expected
+    assert set(moved) == {"age", "city"}
+
+
 def test_move_unknown_keys_none_allowed():
     """When no keys are in whitelist, all should go to extra_collected."""
     data = {"id": 123, "name": "alex"}
