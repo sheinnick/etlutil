@@ -645,6 +645,7 @@ def move_unknown_keys_to_extra(
     allowed_keys: Iterable[Hashable],
     *,
     extra_key: str = "extra_collected",
+    always_add_extra: bool = False,
 ) -> tuple[dict, list[str]]:
     """Move unknown keys from dict to extra collection, keeping only whitelisted keys.
 
@@ -652,6 +653,8 @@ def move_unknown_keys_to_extra(
         data: Input dictionary to normalize. Must be a dict.
         allowed_keys: Iterable of allowed keys (whitelist). All keys converted to str.
         extra_key: Key name for collecting extra items. Defaults to "extra_collected".
+        always_add_extra: If True, always add extra_key even when no keys were moved.
+            Defaults to False (only add extra_key when there are moved keys).
 
     Returns:
         Tuple of (normalized_dict, moved_keys_list).
@@ -680,6 +683,14 @@ def move_unknown_keys_to_extra(
         {'extra_collected': {'age': 30, 'city': 'berlin'}, 'id': 123, 'name': 'alex'}
         >>> moved
         ['age', 'city']
+
+        >>> # Always add extra_collected even when no keys moved
+        >>> data = {"id": 123, "name": "alex"}
+        >>> result, moved = move_unknown_keys_to_extra(data, ["id", "name"], always_add_extra=True)
+        >>> result
+        {'extra_collected': {}, 'id': 123, 'name': 'alex'}
+        >>> moved
+        []
 
         >>> # Key collision example
         >>> data = {"1": "str_val", 1: "int_val"}
@@ -743,8 +754,8 @@ def move_unknown_keys_to_extra(
             moved_keys.append(final_key)
 
     # Step 4: Add extra items under extra_key if needed
-    # Only create extra collection if there are items to collect and extra_key is not None
-    if extra_items and extra_key is not None:
+    # Create extra collection if there are items OR if always_add_extra is True
+    if (extra_items or always_add_extra) and extra_key is not None:
         kept_items[extra_key] = extra_items
 
     # Step 5: Sort all keys lexicographically for consistent output
