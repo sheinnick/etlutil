@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from etlutil.date import format_year_month, generate_date_array
+from etlutil.date import format_year_month, generate_date_array, get_relative_date_frame
 
 
 # ==================== FIXTURES ====================
@@ -415,3 +415,329 @@ class TestFormatYearMonth:
         """Test that invalid date string raises ValueError."""
         with pytest.raises(ValueError):
             format_year_month(invalid_date)
+
+
+# ==================== GET_RELATIVE_DATE_FRAME TESTS ====================
+class TestGetRelativeDateFrame:
+    """Test cases for get_relative_date_frame function using fixtures and parametrization."""
+
+    # ==================== FIXTURES ====================
+    @pytest.fixture
+    def mock_today(self, monkeypatch):
+        """Mock pendulum.today() to return a fixed date for consistent testing."""
+        import pendulum
+
+        # Mock today to be 2024-06-15 (middle of year, middle of month, Saturday)
+        fixed_today = pendulum.parse("2024-06-15T12:00:00")
+
+        def mock_today_func():
+            return fixed_today
+
+        monkeypatch.setattr(pendulum, "today", mock_today_func)
+        return fixed_today
+
+    @pytest.fixture
+    def expected_current_periods(self):
+        """Expected results for current periods (n=0)."""
+        return {
+            "DAY": ("2024-06-15", "2024-06-15"),
+            "WEEK": ("2024-06-10", "2024-06-16"),  # Monday to Sunday
+            "MONTH": ("2024-06-01", "2024-06-30"),
+            "QUARTER": ("2024-04-01", "2024-06-30"),  # Q2
+            "YEAR": ("2024-01-01", "2024-12-31"),
+        }
+
+    # ==================== BASIC FUNCTIONALITY ====================
+    def test_current_periods(self, mock_today, expected_current_periods):
+        """Test current periods (n=0) for all date parts."""
+        for date_part, expected in expected_current_periods.items():
+            result = get_relative_date_frame(date_part, 0)
+            assert result == expected, f"Failed for {date_part}"
+
+    @pytest.mark.parametrize(
+        "date_part, n, expected",
+        [
+            # Previous periods (n=-1)
+            ("DAY", -1, ("2024-06-14", "2024-06-14")),
+            ("WEEK", -1, ("2024-06-03", "2024-06-09")),
+            ("MONTH", -1, ("2024-05-01", "2024-05-31")),
+            ("QUARTER", -1, ("2024-01-01", "2024-03-31")),  # Q1
+            ("YEAR", -1, ("2023-01-01", "2023-12-31")),
+            # Next periods (n=1)
+            ("DAY", 1, ("2024-06-16", "2024-06-16")),
+            ("WEEK", 1, ("2024-06-17", "2024-06-23")),
+            ("MONTH", 1, ("2024-07-01", "2024-07-31")),
+            ("QUARTER", 1, ("2024-07-01", "2024-09-30")),  # Q3
+            ("YEAR", 1, ("2025-01-01", "2025-12-31")),
+        ],
+    )
+    def test_relative_periods(self, mock_today, date_part, n, expected):
+        """Test relative periods with parametrization."""
+        result = get_relative_date_frame(date_part, n)
+        assert result == expected
+
+    # ==================== MULTIPLE PERIODS ====================
+    @pytest.mark.parametrize(
+        "date_part, n, expected",
+        [
+            # Multiple previous periods
+            ("DAY", -7, ("2024-06-08", "2024-06-08")),
+            ("WEEK", -4, ("2024-05-13", "2024-05-19")),
+            ("MONTH", -6, ("2023-12-01", "2023-12-31")),
+            ("QUARTER", -2, ("2023-10-01", "2023-12-31")),  # Q4 2023
+            ("YEAR", -3, ("2021-01-01", "2021-12-31")),
+            # Multiple next periods
+            ("DAY", 10, ("2024-06-25", "2024-06-25")),
+            ("WEEK", 8, ("2024-08-05", "2024-08-11")),
+            ("MONTH", 12, ("2025-06-01", "2025-06-30")),
+            ("QUARTER", 3, ("2025-01-01", "2025-03-31")),  # Q1 2025
+            ("YEAR", 5, ("2029-01-01", "2029-12-31")),
+        ],
+    )
+    def test_multiple_periods(self, mock_today, date_part, n, expected):
+        """Test multiple periods forward and backward."""
+        result = get_relative_date_frame(date_part, n)
+        assert result == expected
+
+    # ==================== QUARTER SPECIFIC TESTS ====================
+    @pytest.mark.parametrize(
+        "n, expected_quarter, expected_range",
+        [
+            (-1, "Q1", ("2024-01-01", "2024-03-31")),
+            (0, "Q2", ("2024-04-01", "2024-06-30")),
+            (1, "Q3", ("2024-07-01", "2024-09-30")),
+            (2, "Q4", ("2024-10-01", "2024-12-31")),
+            (4, "Q2_2025", ("2025-04-01", "2025-06-30")),  # Same quarter next year
+            (-4, "Q2_2023", ("2023-04-01", "2023-06-30")),  # Same quarter previous year
+        ],
+    )
+    def test_quarter_boundaries(self, mock_today, n, expected_quarter, expected_range):
+        """Test quarter boundaries and transitions."""
+        result = get_relative_date_frame("QUARTER", n)
+        assert result == expected_range, f"Failed for {expected_quarter}"
+
+    # ==================== YEAR BOUNDARY TESTS ====================
+    @pytest.mark.parametrize(
+        "date_part, n, expected",
+        [
+            # Cross year boundaries
+            ("MONTH", 6, ("2024-12-01", "2024-12-31")),  # December 2024
+            ("MONTH", 7, ("2025-01-01", "2025-01-31")),  # January 2025
+            ("MONTH", -6, ("2023-12-01", "2023-12-31")),  # December 2023
+            ("MONTH", -7, ("2023-11-01", "2023-11-30")),  # November 2023
+        ],
+    )
+    def test_year_boundaries(self, mock_today, date_part, n, expected):
+        """Test crossing year boundaries."""
+        result = get_relative_date_frame(date_part, n)
+        assert result == expected
+
+    # ==================== LEAP YEAR HANDLING ====================
+    def test_leap_year_february(self, monkeypatch):
+        """Test February in leap year (2024)."""
+        import pendulum
+
+        # Mock today to be in February 2024 (leap year)
+        fixed_today = pendulum.parse("2024-02-15T12:00:00")
+        monkeypatch.setattr(pendulum, "today", lambda: fixed_today)
+
+        result = get_relative_date_frame("MONTH", 0)
+        assert result == ("2024-02-01", "2024-02-29")  # 29 days in leap year
+
+    def test_non_leap_year_february(self, monkeypatch):
+        """Test February in non-leap year (2023)."""
+        import pendulum
+
+        # Mock today to be in February 2023 (non-leap year)
+        fixed_today = pendulum.parse("2023-02-15T12:00:00")
+        monkeypatch.setattr(pendulum, "today", lambda: fixed_today)
+
+        result = get_relative_date_frame("MONTH", 0)
+        assert result == ("2023-02-01", "2023-02-28")  # 28 days in non-leap year
+
+    # ==================== WEEK START TESTS ====================
+    def test_week_starts_monday(self, mock_today):
+        """Test that weeks start on Monday (ISO 8601 standard)."""
+        # Our mock date is Saturday 2024-06-15
+        result = get_relative_date_frame("WEEK", 0)
+        start_date, end_date = result
+
+        # Week should start on Monday 2024-06-10 and end on Sunday 2024-06-16
+        assert start_date == "2024-06-10"  # Monday
+        assert end_date == "2024-06-16"  # Sunday
+
+    @pytest.mark.parametrize(
+        "mock_date, expected_week_start, expected_week_end",
+        [
+            ("2024-06-10", "2024-06-10", "2024-06-16"),  # Monday
+            ("2024-06-11", "2024-06-10", "2024-06-16"),  # Tuesday
+            ("2024-06-12", "2024-06-10", "2024-06-16"),  # Wednesday
+            ("2024-06-13", "2024-06-10", "2024-06-16"),  # Thursday
+            ("2024-06-14", "2024-06-10", "2024-06-16"),  # Friday
+            ("2024-06-15", "2024-06-10", "2024-06-16"),  # Saturday
+            ("2024-06-16", "2024-06-10", "2024-06-16"),  # Sunday
+        ],
+    )
+    def test_week_boundaries_all_days(self, monkeypatch, mock_date, expected_week_start, expected_week_end):
+        """Test that same week is returned regardless of which day we start from."""
+        import pendulum
+
+        fixed_today = pendulum.parse(f"{mock_date}T12:00:00")
+        monkeypatch.setattr(pendulum, "today", lambda: fixed_today)
+
+        result = get_relative_date_frame("WEEK", 0)
+        assert result == (expected_week_start, expected_week_end)
+
+    # ==================== DEFAULT PARAMETERS ====================
+    def test_default_parameters(self, mock_today):
+        """Test function with default parameters (MONTH, n=0)."""
+        result = get_relative_date_frame()
+        expected = get_relative_date_frame("MONTH", 0)
+        assert result == expected
+        assert result == ("2024-06-01", "2024-06-30")
+
+    def test_default_month_parameter(self, mock_today):
+        """Test function with only n parameter (default MONTH)."""
+        result = get_relative_date_frame(n=-1)
+        expected = get_relative_date_frame("MONTH", -1)
+        assert result == expected
+        assert result == ("2024-05-01", "2024-05-31")
+
+    # ==================== ERROR HANDLING ====================
+    @pytest.mark.parametrize(
+        "invalid_date_part",
+        [
+            "day",  # lowercase
+            "DAYS",  # plural
+            "months",  # plural + lowercase
+            "invalid",  # completely invalid
+            "SEMESTER",  # not supported
+            "",  # empty string
+            None,  # None value
+        ],
+    )
+    def test_invalid_date_part(self, mock_today, invalid_date_part):
+        """Test that invalid date_part raises ValueError."""
+        with pytest.raises(ValueError, match="date_part must be"):
+            get_relative_date_frame(invalid_date_part, 0)
+
+    # ==================== EDGE CASES ====================
+    def test_zero_offset(self, mock_today):
+        """Test that n=0 returns current period for all date parts."""
+        for date_part in ["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]:
+            result = get_relative_date_frame(date_part, 0)
+            start_date, end_date = result
+
+            # Verify format
+            assert len(start_date) == 10  # YYYY-MM-DD
+            assert len(end_date) == 10  # YYYY-MM-DD
+            assert start_date <= end_date  # Start should be before or equal to end
+
+    def test_large_offsets(self, mock_today):
+        """Test with large positive and negative offsets."""
+        # Large positive offset
+        result = get_relative_date_frame("YEAR", 100)
+        assert result == ("2124-01-01", "2124-12-31")
+
+        # Large negative offset
+        result = get_relative_date_frame("YEAR", -100)
+        assert result == ("1924-01-01", "1924-12-31")
+
+    # ==================== date_from PARAMETER TESTS ====================
+    def test_date_from_string(self):
+        """Test with date_from as string."""
+        result = get_relative_date_frame("MONTH", 0, date_from="2024-06-15")
+        assert result == ("2024-06-01", "2024-06-30")
+
+        # Test different month
+        result = get_relative_date_frame("MONTH", 0, date_from="2024-02-15")
+        assert result == ("2024-02-01", "2024-02-29")  # Leap year
+
+    def test_date_from_object(self):
+        """Test with date_from as date object."""
+        from datetime import date
+
+        result = get_relative_date_frame("MONTH", 0, date_from=date(2024, 6, 15))
+        assert result == ("2024-06-01", "2024-06-30")
+
+        # Test different month
+        result = get_relative_date_frame("MONTH", 0, date_from=date(2024, 2, 15))
+        assert result == ("2024-02-01", "2024-02-29")  # Leap year
+
+    @pytest.mark.parametrize(
+        "date_from, date_part, n, expected",
+        [
+            ("2024-06-15", "DAY", 0, ("2024-06-15", "2024-06-15")),
+            ("2024-06-15", "DAY", 1, ("2024-06-16", "2024-06-16")),
+            ("2024-06-15", "DAY", -1, ("2024-06-14", "2024-06-14")),
+            ("2024-06-15", "WEEK", 0, ("2024-06-10", "2024-06-16")),  # Same week
+            ("2024-06-15", "MONTH", 0, ("2024-06-01", "2024-06-30")),
+            ("2024-06-15", "MONTH", 1, ("2024-07-01", "2024-07-31")),
+            ("2024-06-15", "MONTH", -1, ("2024-05-01", "2024-05-31")),
+            ("2024-06-15", "QUARTER", 0, ("2024-04-01", "2024-06-30")),  # Q2
+            ("2024-06-15", "QUARTER", 1, ("2024-07-01", "2024-09-30")),  # Q3
+            ("2024-06-15", "QUARTER", -1, ("2024-01-01", "2024-03-31")),  # Q1
+            ("2024-06-15", "YEAR", 0, ("2024-01-01", "2024-12-31")),
+            ("2024-06-15", "YEAR", 1, ("2025-01-01", "2025-12-31")),
+            ("2024-06-15", "YEAR", -1, ("2023-01-01", "2023-12-31")),
+        ],
+    )
+    def test_date_from_parametrized(self, date_from, date_part, n, expected):
+        """Test date_from parameter with various combinations."""
+        result = get_relative_date_frame(date_part, n, date_from=date_from)
+        assert result == expected
+
+    def test_date_from_vs_mock_today(self, mock_today):
+        """Test that date_from overrides current date."""
+        # With mock_today (2024-06-15), current month would be June
+        result_mock = get_relative_date_frame("MONTH", 0)
+        assert result_mock == ("2024-06-01", "2024-06-30")
+
+        # With date_from, should get different month
+        result_date_from = get_relative_date_frame("MONTH", 0, date_from="2024-12-15")
+        assert result_date_from == ("2024-12-01", "2024-12-31")
+
+        # Results should be different
+        assert result_mock != result_date_from
+
+    def test_date_from_quarter_calculations(self):
+        """Test quarter calculations with different date_from values."""
+        # Test from different quarters
+        q1_result = get_relative_date_frame("QUARTER", 0, date_from="2024-02-15")
+        assert q1_result == ("2024-01-01", "2024-03-31")  # Q1
+
+        q2_result = get_relative_date_frame("QUARTER", 0, date_from="2024-05-15")
+        assert q2_result == ("2024-04-01", "2024-06-30")  # Q2
+
+        q3_result = get_relative_date_frame("QUARTER", 0, date_from="2024-08-15")
+        assert q3_result == ("2024-07-01", "2024-09-30")  # Q3
+
+        q4_result = get_relative_date_frame("QUARTER", 0, date_from="2024-11-15")
+        assert q4_result == ("2024-10-01", "2024-12-31")  # Q4
+
+    def test_date_from_year_boundaries(self):
+        """Test year boundary calculations with date_from."""
+        # Test calculations across year boundaries
+        result = get_relative_date_frame("MONTH", 1, date_from="2024-12-15")
+        assert result == ("2025-01-01", "2025-01-31")  # Next month in next year
+
+        result = get_relative_date_frame("MONTH", -1, date_from="2024-01-15")
+        assert result == ("2023-12-01", "2023-12-31")  # Previous month in previous year
+
+        result = get_relative_date_frame("QUARTER", 1, date_from="2024-11-15")
+        assert result == ("2025-01-01", "2025-03-31")  # Next quarter in next year
+
+    # ==================== RETURN TYPE VERIFICATION ====================
+    def test_return_type(self, mock_today):
+        """Test that function returns tuple of two strings."""
+        result = get_relative_date_frame("MONTH", 0)
+
+        assert isinstance(result, tuple)
+        assert len(result) == 2
+        assert isinstance(result[0], str)
+        assert isinstance(result[1], str)
+
+        # Verify date format (YYYY-MM-DD)
+        start_date, end_date = result
+        assert len(start_date.split("-")) == 3
+        assert len(end_date.split("-")) == 3
