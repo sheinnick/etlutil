@@ -643,6 +643,90 @@ class TestGetRelativeDateFrame:
         result = get_relative_date_frame("YEAR", -100)
         assert result == ("1924-01-01", "1924-12-31")
 
+    # ==================== date_from PARAMETER TESTS ====================
+    def test_date_from_string(self):
+        """Test with date_from as string."""
+        result = get_relative_date_frame("MONTH", 0, date_from="2024-06-15")
+        assert result == ("2024-06-01", "2024-06-30")
+
+        # Test different month
+        result = get_relative_date_frame("MONTH", 0, date_from="2024-02-15")
+        assert result == ("2024-02-01", "2024-02-29")  # Leap year
+
+    def test_date_from_object(self):
+        """Test with date_from as date object."""
+        from datetime import date
+
+        result = get_relative_date_frame("MONTH", 0, date_from=date(2024, 6, 15))
+        assert result == ("2024-06-01", "2024-06-30")
+
+        # Test different month
+        result = get_relative_date_frame("MONTH", 0, date_from=date(2024, 2, 15))
+        assert result == ("2024-02-01", "2024-02-29")  # Leap year
+
+    @pytest.mark.parametrize(
+        "date_from, date_part, n, expected",
+        [
+            ("2024-06-15", "DAY", 0, ("2024-06-15", "2024-06-15")),
+            ("2024-06-15", "DAY", 1, ("2024-06-16", "2024-06-16")),
+            ("2024-06-15", "DAY", -1, ("2024-06-14", "2024-06-14")),
+            ("2024-06-15", "WEEK", 0, ("2024-06-10", "2024-06-16")),  # Same week
+            ("2024-06-15", "MONTH", 0, ("2024-06-01", "2024-06-30")),
+            ("2024-06-15", "MONTH", 1, ("2024-07-01", "2024-07-31")),
+            ("2024-06-15", "MONTH", -1, ("2024-05-01", "2024-05-31")),
+            ("2024-06-15", "QUARTER", 0, ("2024-04-01", "2024-06-30")),  # Q2
+            ("2024-06-15", "QUARTER", 1, ("2024-07-01", "2024-09-30")),  # Q3
+            ("2024-06-15", "QUARTER", -1, ("2024-01-01", "2024-03-31")),  # Q1
+            ("2024-06-15", "YEAR", 0, ("2024-01-01", "2024-12-31")),
+            ("2024-06-15", "YEAR", 1, ("2025-01-01", "2025-12-31")),
+            ("2024-06-15", "YEAR", -1, ("2023-01-01", "2023-12-31")),
+        ],
+    )
+    def test_date_from_parametrized(self, date_from, date_part, n, expected):
+        """Test date_from parameter with various combinations."""
+        result = get_relative_date_frame(date_part, n, date_from=date_from)
+        assert result == expected
+
+    def test_date_from_vs_mock_today(self, mock_today):
+        """Test that date_from overrides current date."""
+        # With mock_today (2024-06-15), current month would be June
+        result_mock = get_relative_date_frame("MONTH", 0)
+        assert result_mock == ("2024-06-01", "2024-06-30")
+
+        # With date_from, should get different month
+        result_date_from = get_relative_date_frame("MONTH", 0, date_from="2024-12-15")
+        assert result_date_from == ("2024-12-01", "2024-12-31")
+
+        # Results should be different
+        assert result_mock != result_date_from
+
+    def test_date_from_quarter_calculations(self):
+        """Test quarter calculations with different date_from values."""
+        # Test from different quarters
+        q1_result = get_relative_date_frame("QUARTER", 0, date_from="2024-02-15")
+        assert q1_result == ("2024-01-01", "2024-03-31")  # Q1
+
+        q2_result = get_relative_date_frame("QUARTER", 0, date_from="2024-05-15")
+        assert q2_result == ("2024-04-01", "2024-06-30")  # Q2
+
+        q3_result = get_relative_date_frame("QUARTER", 0, date_from="2024-08-15")
+        assert q3_result == ("2024-07-01", "2024-09-30")  # Q3
+
+        q4_result = get_relative_date_frame("QUARTER", 0, date_from="2024-11-15")
+        assert q4_result == ("2024-10-01", "2024-12-31")  # Q4
+
+    def test_date_from_year_boundaries(self):
+        """Test year boundary calculations with date_from."""
+        # Test calculations across year boundaries
+        result = get_relative_date_frame("MONTH", 1, date_from="2024-12-15")
+        assert result == ("2025-01-01", "2025-01-31")  # Next month in next year
+
+        result = get_relative_date_frame("MONTH", -1, date_from="2024-01-15")
+        assert result == ("2023-12-01", "2023-12-31")  # Previous month in previous year
+
+        result = get_relative_date_frame("QUARTER", 1, date_from="2024-11-15")
+        assert result == ("2025-01-01", "2025-03-31")  # Next quarter in next year
+
     # ==================== RETURN TYPE VERIFICATION ====================
     def test_return_type(self, mock_today):
         """Test that function returns tuple of two strings."""

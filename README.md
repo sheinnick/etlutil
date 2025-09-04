@@ -265,16 +265,29 @@ six_months_ago = get_relative_date_frame("MONTH", -6)
 this_month = get_relative_date_frame()
 # Result: same as get_relative_date_frame("MONTH", 0)
 
+# Custom base date (instead of today)
+custom_month = get_relative_date_frame("MONTH", 0, date_from="2024-06-15")
+# Result: ("2024-06-01", "2024-06-30") - June 2024 regardless of current date
+
+custom_quarter = get_relative_date_frame("QUARTER", -1, date_from=date(2024, 6, 15))
+# Result: ("2024-01-01", "2024-03-31") - Q1 2024 (previous quarter from June)
+
 # Use cases for ETL/Analytics
-def get_data_for_period(period_type="MONTH", offset=-1):
+def get_data_for_period(period_type="MONTH", offset=-1, date_base=None):
     """Get data for relative time period."""
-    start_date, end_date = get_relative_date_frame(period_type, offset)
+    start_date, end_date = get_relative_date_frame(period_type, offset, date_from=date_base)
     return f"SELECT * FROM events WHERE date BETWEEN '{start_date}' AND '{end_date}'"
 
 # Examples:
-get_data_for_period("MONTH", -1)    # Last month's data
+get_data_for_period("MONTH", -1)    # Last month's data (from today)
 get_data_for_period("QUARTER", 0)   # Current quarter's data
 get_data_for_period("WEEK", -4)     # 4 weeks ago data
+
+# With custom base date for consistent reporting
+report_date = "2024-06-30"  # End of Q2 2024
+get_data_for_period("QUARTER", 0, report_date)   # Q2 2024 data
+get_data_for_period("QUARTER", -1, report_date)  # Q1 2024 data
+get_data_for_period("YEAR", 0, report_date)      # 2024 full year data
 ```
 
 ## Supported Date Parts
