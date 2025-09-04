@@ -7,6 +7,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
 - **Date Processing**:
   - Generate date arrays similar to BigQuery's `GENERATE_DATE_ARRAY`
   - Format dates to year-month strings (`YYYY-MM` format)
+  - Get relative date ranges (current/previous/next periods)
 - **Data Cleaning**:
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
@@ -225,6 +226,55 @@ year_month = format_year_month("2024-03-16")
 # Handles different months correctly
 format_year_month(date(2024, 1, 15))   # "2024-01" (with leading zero)
 format_year_month(date(2024, 12, 31))  # "2024-12"
+```
+
+### Relative Date Ranges
+
+```python
+from etlutil import get_relative_date_frame
+
+# Current periods (n=0)
+current_month = get_relative_date_frame("MONTH", 0)
+# Result: ("2024-06-01", "2024-06-30") - current month boundaries
+
+current_quarter = get_relative_date_frame("QUARTER", 0)
+# Result: ("2024-04-01", "2024-06-30") - Q2 2024 if current date is in Q2
+
+current_year = get_relative_date_frame("YEAR", 0)
+# Result: ("2024-01-01", "2024-12-31") - current year
+
+# Previous periods (n=-1)
+last_month = get_relative_date_frame("MONTH", -1)
+# Result: ("2024-05-01", "2024-05-31") - previous month
+
+last_quarter = get_relative_date_frame("QUARTER", -1)
+# Result: ("2024-01-01", "2024-03-31") - Q1 2024 if current is Q2
+
+# Next periods (n=1)
+next_week = get_relative_date_frame("WEEK", 1)
+# Result: ("2024-06-17", "2024-06-23") - next week (Monday to Sunday)
+
+next_year = get_relative_date_frame("YEAR", 1)
+# Result: ("2025-01-01", "2025-12-31") - next year
+
+# Multiple periods
+six_months_ago = get_relative_date_frame("MONTH", -6)
+# Result: ("2023-12-01", "2023-12-31") - 6 months ago
+
+# Default parameters (MONTH, n=0)
+this_month = get_relative_date_frame()
+# Result: same as get_relative_date_frame("MONTH", 0)
+
+# Use cases for ETL/Analytics
+def get_data_for_period(period_type="MONTH", offset=-1):
+    """Get data for relative time period."""
+    start_date, end_date = get_relative_date_frame(period_type, offset)
+    return f"SELECT * FROM events WHERE date BETWEEN '{start_date}' AND '{end_date}'"
+
+# Examples:
+get_data_for_period("MONTH", -1)    # Last month's data
+get_data_for_period("QUARTER", 0)   # Current quarter's data
+get_data_for_period("WEEK", -4)     # 4 weeks ago data
 ```
 
 ## Supported Date Parts

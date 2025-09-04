@@ -5,6 +5,7 @@ Date processing helper functions for ETL tasks.
 from datetime import date, timedelta
 from typing import Literal
 
+import pendulum
 from dateutil.relativedelta import relativedelta
 
 DatePart = Literal["DAY", "WEEK", "MONTH", "QUARTER", "YEAR"]
@@ -128,3 +129,60 @@ def generate_date_array(
         step += 1
 
     return date_list
+
+
+def get_relative_date_frame(date_part: DatePart = "MONTH", n: int = 0):
+    """
+    Args:
+        date_part: Date part - DAY, WEEK, MONTH, QUARTER, or YEAR (default MONTH)
+        n: relative offset (0 = current, <0 = past, >0 = future)
+
+    Returns:
+        tuple[str, str]: (start_date, end_date) in YYYY-MM-DD format
+
+    Raises:
+        ValueError: If date_part is not one of the supported values
+    Examples:
+        >>> get_relative_date_frame("MONTH", 0)  # current month
+        ('2024-01-01', '2024-01-31')
+
+        >>> get_relative_date_frame("MONTH", -1)  # previous month
+        ('2023-12-01', '2023-12-31')
+
+        >>> get_relative_date_frame("QUARTER", 1)  # next quarter
+        ('2024-04-01', '2024-06-30')
+
+        >>> get_relative_date_frame("YEAR", -2)  # 2 years ago
+        ('2022-01-01', '2022-12-31')
+
+    """
+    today = pendulum.today()
+
+    match date_part:
+        case "DAY":
+            target = today.add(days=n)
+            start, end = target.start_of("day"), target.end_of("day")
+
+        case "WEEK":
+            target = today.add(weeks=n)
+            start, end = target.start_of("week"), target.end_of("week")
+
+        case "MONTH":
+            target = today.add(months=n)
+            start, end = target.start_of("month"), target.end_of("month")
+
+        case "QUARTER":
+            target = today.add(months=3 * n)
+            # Calculate quarter manually since pendulum doesn't support "quarter"
+            quarter_month = ((target.month - 1) // 3) * 3 + 1  # 1, 4, 7, or 10
+            start = target.replace(month=quarter_month, day=1).start_of("month")
+            end = target.replace(month=quarter_month + 2, day=1).end_of("month")
+
+        case "YEAR":
+            target = today.add(years=n)
+            start, end = target.start_of("year"), target.end_of("year")
+
+        case _:
+            raise ValueError("date_part must be - DAY, WEEK, MONTH, QUARTER, or YEAR")
+
+    return start.to_date_string(), end.to_date_string()
