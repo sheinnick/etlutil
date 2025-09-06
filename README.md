@@ -8,6 +8,9 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
   - Generate date arrays similar to BigQuery's `GENERATE_DATE_ARRAY`
   - Format dates to year-month strings (`YYYY-MM` format)
   - Get relative date ranges (current/previous/next periods)
+  - Advanced date range manipulation with `DateRange` and `DateRanges` classes
+  - Date conversion utilities (`to_date`, `to_date_iso_str`) for normalizing inputs
+  - Support for `date`, `datetime`, and ISO string inputs with `DateLike` type
 - **Data Cleaning**:
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
@@ -182,6 +185,86 @@ Key points:
 - **Immutable operation**: Original data unchanged, returns new dictionary
 - **Type conversion**: All keys converted to strings for consistent processing
 
+### Date Processing (Quick Examples)
+
+```python
+from etlutil import generate_date_array, DateRange, DateRanges, to_date, to_date_iso_str, DateLike
+from datetime import datetime, date
+
+# Date conversion utilities
+dt = datetime(2024, 3, 15, 12, 30)
+to_date(dt)           # date(2024, 3, 15) - extract date from datetime
+to_date_iso_str(dt)   # "2024-03-15" - format any date input as ISO string
+
+# Generate date arrays
+dates = generate_date_array("2024-01-01", "2024-01-05")
+# [date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3), date(2024, 1, 4), date(2024, 1, 5)]
+
+# Date range manipulation
+dr = DateRange("2024-01-01", "2024-01-07")
+print(dr)  # [2024-01-01 → 2024-01-07]
+dr.days_count()  # 7
+dr.contains("2024-01-05")  # True
+
+# Multiple ranges generation  
+generator = DateRanges()
+weeks = generator.calendar_periods("WEEK", count=4, date_end="2024-01-28")
+# 4 most recent complete weeks
+
+# Support for datetime objects (automatically extracts date components)
+dr = DateRange(datetime(2024, 1, 1, 10, 30), datetime(2024, 1, 7, 18, 45))
+```
+
+## Detailed Examples
+
+### Date Conversion Utilities
+
+Convenient utilities for normalizing and formatting date inputs:
+
+```python
+from etlutil import to_date, to_date_iso_str, DateLike
+from datetime import datetime, date
+
+# to_date() - normalize any DateLike input to date object
+dt = datetime(2024, 3, 15, 12, 30, 45)
+d = date(2024, 3, 15)
+s = "2024-03-15"
+
+to_date(dt)  # date(2024, 3, 15) - extracts date part
+to_date(d)   # date(2024, 3, 15) - returns as-is
+to_date(s)   # date(2024, 3, 15) - parses ISO string
+
+# to_date_iso_str() - format any DateLike input as ISO string
+to_date_iso_str(dt)  # "2024-03-15"
+to_date_iso_str(d)   # "2024-03-15"
+to_date_iso_str(s)   # "2024-03-15" (idempotent)
+
+# Use in your own functions with DateLike type hint
+def calculate_business_days(start: DateLike, end: DateLike) -> int:
+    """Calculate business days between dates."""
+    start_date = to_date(start)
+    end_date = to_date(end)
+    # ... business logic
+    return (end_date - start_date).days
+
+# Works with any date input type
+days = calculate_business_days("2024-01-01", datetime(2024, 1, 10, 15, 30))
+days = calculate_business_days(date(2024, 1, 1), "2024-01-10")
+
+# Useful for data processing pipelines
+def normalize_date_column(dates: list[DateLike]) -> list[str]:
+    """Convert mixed date inputs to consistent ISO strings."""
+    return [to_date_iso_str(d) for d in dates]
+
+mixed_dates = [
+    "2024-01-01",
+    datetime(2024, 1, 2, 10, 30),
+    date(2024, 1, 3)
+]
+normalized = normalize_date_column(mixed_dates)
+# Result: ["2024-01-01", "2024-01-02", "2024-01-03"]
+```
+
 ### Date Array Generation
 
 ```python
@@ -290,6 +373,109 @@ get_data_for_period("QUARTER", -1, report_date)  # Q1 2024 data
 get_data_for_period("YEAR", 0, report_date)      # 2024 full year data
 ```
 
+### Date Range Manipulation
+
+Advanced date range operations with `DateRange` class:
+
+```python
+from etlutil import DateRange
+from datetime import date, datetime
+
+# Create date ranges
+dr = DateRange("2024-01-01", "2024-01-07")  # Week range
+single_day = DateRange("2024-01-15")        # Single day
+today_range = DateRange()                   # Today only
+
+# Support for date/datetime objects
+dr = DateRange(date(2024, 1, 1), datetime(2024, 1, 7, 23, 59))
+
+# String representation
+print(dr)  # [2024-01-01 → 2024-01-07]
+
+# Conversion methods
+dr.as_tuple()    # ("2024-01-01", "2024-01-07")
+dr.as_list()     # ["2024-01-01", "2024-01-07"]
+dr.as_dict()     # {"date_start": "2024-01-01", "date_end": "2024-01-07"}
+
+# Custom formatting
+dr.format("{start} to {end}")  # "2024-01-01 to 2024-01-07"
+
+# API-specific formats
+dr.to_fb_time_range()    # {"since": "2024-01-01", "until": "2024-01-07"}
+dr.to_reddit_range()     # {"starts_at": "2024-01-01T00:00:00Z", "ends_at": "2024-01-08T00:00:00Z"}
+
+# Utility methods
+dr.contains("2024-01-05")        # True
+dr.days_count()                  # 7
+dr.overlaps(other_range)         # True/False
+
+# Range manipulation
+extended = dr.extend_by_days(2, 3)    # Extend 2 days back, 3 forward
+shifted = dr.shift_by_days(5)         # Shift entire range 5 days forward
+week_bounds = dr.extend_to_week_bounds()    # Extend to Monday-Sunday
+month_bounds = dr.extend_to_month_bounds()  # Extend to month boundaries
+
+# Split into chunks
+chunks = dr.split(3)  # Split into 3-day chunks
+# Result: [[2024-01-01 → 2024-01-03], [2024-01-04 → 2024-01-06], [2024-01-07 → 2024-01-07]]
+
+# Static methods for common patterns
+around = DateRange.around_date("2024-01-15", days_lookback=5, days_lookforward=3)
+# Result: [2024-01-10 → 2024-01-18]
+
+month_period = DateRange.single_calendar_period("MONTH", offset=-1, date_anchor="2024-06-15")
+# Result: [2024-05-01 → 2024-05-31] (previous month)
+
+# Timestamp conversion
+timestamps = dr.to_timestamps()
+# Result: {"starts_at": "2024-01-01T00:00:00Z", "ends_at": "2024-01-08T00:00:00Z"}
+
+# With timezone
+london_timestamps = dr.to_timestamps(tz="Europe/London")
+```
+
+### Multiple Date Ranges Generation
+
+Generate multiple date ranges with `DateRanges` class:
+
+```python
+from etlutil import DateRanges
+
+generator = DateRanges()
+
+# Generate calendar periods (weeks/months/quarters)
+weeks = generator.calendar_periods("WEEK", count=4, date_end="2024-01-28")
+# Result: 4 most recent complete weeks ending on 2024-01-28
+
+months = generator.calendar_periods("MONTH", count=3, date_end="2024-03-15")
+# Result: [Feb 2024 (trimmed), Jan 2024, Dec 2023]
+
+# Without trimming the last period
+full_months = generator.calendar_periods("MONTH", count=2, date_end="2024-03-15", trim_last_period=False)
+# Result: [Mar 2024 (full month), Feb 2024]
+
+# Offset-based ranges
+offset_ranges = generator.offset_range_buckets("WEEK", offset_start=0, offset_end=-3, date_end="2024-01-28")
+# Result: Current week, -1 week, -2 weeks, -3 weeks from end date
+
+# Split lookback period into chunks
+lookback_chunks = generator.split_lookback_period(total_days=30, chunk_days=7, date_end="2024-01-30")
+# Result: 30-day period split into ~7-day chunks, working backwards from end date
+
+# Common analytics patterns
+def get_weekly_cohorts(end_date, weeks=8):
+    """Get weekly cohorts for retention analysis."""
+    return generator.calendar_periods("WEEK", count=weeks, date_end=end_date)
+
+def get_monthly_comparison_periods(base_date, months=6):
+    """Get months for year-over-year comparison."""
+    return generator.calendar_periods("MONTH", count=months, date_end=base_date)
+
+# Usage examples
+weekly_cohorts = get_weekly_cohorts("2024-01-28", 12)  # Last 12 weeks
+monthly_periods = get_monthly_comparison_periods("2024-06-30", 6)  # H1 2024
+```
+
 ## Supported Date Parts
 
 - `"DAY"` - Daily intervals
@@ -300,10 +486,13 @@ get_data_for_period("YEAR", 0, report_date)      # 2024 full year data
 
 ## Input Formats
 
-Dates can be provided as:
+All date functions support flexible input types (`DateLike`):
 
-- `date` objects: `date(2024, 1, 1)`
-- ISO format strings: `"2024-01-01"`
+- **`date` objects**: `date(2024, 1, 1)`
+- **`datetime` objects**: `datetime(2024, 1, 1, 14, 30)`  
+- **ISO format strings**: `"2024-01-01"`
+
+The library automatically converts between types as needed, extracting date components from datetime objects and parsing ISO strings.
 
 ## Development
 
