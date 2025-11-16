@@ -508,7 +508,18 @@ convertible_values = st.one_of(
     st.none(),
 )
 
-conversion_types = st.sampled_from(["int", "float", "bool", "str", "timestamp_to_iso"])
+conversion_types = st.sampled_from(
+    [
+        "int",
+        "float",
+        "bool",
+        "str",
+        "timestamp_to_iso",
+        "timestamp_to_iso_date",
+        "timestamp_to_iso_YYYY-MM",
+        "timestamp_to_iso_YYYY",
+    ]
+)
 
 schema_strategy = st.dictionaries(
     keys=st.text(min_size=1, max_size=10), values=conversion_types, min_size=1, max_size=5

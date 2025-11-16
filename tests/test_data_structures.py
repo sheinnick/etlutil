@@ -722,6 +722,12 @@ def test_move_unknown_keys_immutability():
         ("2024-12-25", "datetime", datetime(2024, 12, 25, 0, 0, 0)),
         ("1735056631", "timestamp_to_iso", "2024-12-24T20:10:31"),
         (1735056631, "timestamp_to_iso", "2024-12-24T20:10:31"),
+        ("1735056631", "timestamp_to_iso_date", "2024-12-24"),
+        (1735056631, "timestamp_to_iso_date", "2024-12-24"),
+        ("1735056631", "timestamp_to_iso_YYYY-MM", "2024-12"),
+        (1735056631, "timestamp_to_iso_YYYY-MM", "2024-12"),
+        ("1735056631", "timestamp_to_iso_YYYY", "2024"),
+        (1735056631, "timestamp_to_iso_YYYY", "2024"),
         (42, "str", "42"),
         (True, "str", "True"),
         (3.14, "str", "3.14"),
@@ -764,6 +770,42 @@ def test_convert_with_enum_schema(conversion_data):
     assert result["str_bool_true"] is True
     assert result["str_date"] == date(2024, 12, 25)
     assert result["str_timestamp"] == "2024-12-24T20:10:31"
+
+
+@pytest.mark.parametrize(
+    "target_type,expected",
+    [
+        ("timestamp_to_iso_date", "2024-12-24"),
+        ("timestamp_to_iso_YYYY-MM", "2024-12"),
+        ("timestamp_to_iso_YYYY", "2024"),
+    ],
+)
+def test_convert_timestamp_to_iso_formats(conversion_data, target_type, expected):
+    """Test new timestamp to ISO format conversions."""
+    schema = {
+        "str_timestamp": target_type,
+    }
+
+    result = convert_dict_types(conversion_data, schema)
+    assert result["str_timestamp"] == expected
+
+
+@pytest.mark.parametrize(
+    "target_type,expected",
+    [
+        (ConvertType.TIMESTAMP_TO_ISO_DATE, "2024-12-24"),
+        (ConvertType.TIMESTAMP_TO_ISO_YYYY_MM, "2024-12"),
+        (ConvertType.TIMESTAMP_TO_ISO_YYYY, "2024"),
+    ],
+)
+def test_convert_timestamp_to_iso_formats_with_enum(conversion_data, target_type, expected):
+    """Test new timestamp to ISO format conversions using ConvertType enum."""
+    schema = {
+        "str_timestamp": target_type,
+    }
+
+    result = convert_dict_types(conversion_data, schema)
+    assert result["str_timestamp"] == expected
 
 
 def test_convert_recursive_vs_non_recursive(nested_conversion_data):

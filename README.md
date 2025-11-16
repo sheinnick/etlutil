@@ -14,6 +14,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
 - **Data Cleaning**:
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
+  - Schema-driven value conversion with `convert_dict_types` (int/float/bool/date/datetime/timestamp family)
 - **Data Structure Visualization**:
   - Tree-style visualization and data collection via `walk`
 
@@ -580,10 +581,19 @@ schema = {
 }
 
 # Unix timestamp conversion
-data = {"created_at": "1735056631", "updated_at": 1735056631}
+data = {
+    "created_at"   : "1735056631",
+    "updated_at"   :  1735056631 ,
+    "updated_date" : "1735056631",
+    "updated_month": "1735056631",
+    "updated_year" : "1735056631",
+}
 schema = {
-    "created_at": "timestamp",        # → datetime object
-    "updated_at": "timestamp_to_iso"  # → ISO string "2024-12-24T20:10:31"
+    "created_at":    "timestamp",                # → datetime object
+    "updated_at":    "timestamp_to_iso",         # → ISO string "2024-12-24T20:10:31"
+    "updated_date":  "timestamp_to_iso_date",    # → ISO date "2024-12-24"
+    "updated_month": "timestamp_to_iso_YYYY-MM", # → month string "2024-12"
+    "updated_year":  "timestamp_to_iso_YYYY",    # → year string "2024"
 }
 
 # Recursive processing for nested data
@@ -631,6 +641,9 @@ result = convert_dict_types(data, schema, empty_string_to_none=True)
 - `"datetime"` - Datetime objects with configurable formats
 - `"timestamp"` - Unix timestamp → datetime object
 - `"timestamp_to_iso"` - Unix timestamp → ISO string
+- `"timestamp_to_iso_date"` - Unix timestamp → ISO date (YYYY-MM-DD)
+- `"timestamp_to_iso_YYYY-MM"` - Unix timestamp → compact year-month string
+- `"timestamp_to_iso_YYYY"` - Unix timestamp → year-only string
 
 **Key Features:**
 

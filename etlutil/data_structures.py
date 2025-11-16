@@ -893,6 +893,9 @@ class ConvertType(Enum):
     DATETIME = "datetime"  # Convert to datetime.datetime object
     TIMESTAMP = "timestamp"  # Convert unix timestamp to datetime object
     TIMESTAMP_TO_ISO = "timestamp_to_iso"  # Convert unix timestamp to ISO string
+    TIMESTAMP_TO_ISO_DATE = "timestamp_to_iso_date"  # Convert unix timestamp to ISO date (YYYY-MM-DD)
+    TIMESTAMP_TO_ISO_YYYY_MM = "timestamp_to_iso_YYYY-MM"  # Convert unix timestamp to YYYY-MM format
+    TIMESTAMP_TO_ISO_YYYY = "timestamp_to_iso_YYYY"  # Convert unix timestamp to YYYY format
     STR = "str"  # Convert to Python str
 
 
@@ -915,7 +918,8 @@ def convert_dict_types(
         data: Input dictionary or list with mixed values
         type_schema: Dictionary mapping field names to type names or ConvertType enums.
                     Supported types: "int", "float", "bool", "date", "datetime",
-                    "timestamp", "timestamp_to_iso", "str"
+                    "timestamp", "timestamp_to_iso", "timestamp_to_iso_date",
+                    "timestamp_to_iso_YYYY-MM", "timestamp_to_iso_YYYY", "str"
         recursive: If True, recursively process nested dictionaries and lists.
                   Only processes dict and list containers, not tuples or other types.
         strict: If True, raise exceptions on conversion errors instead of returning
@@ -1087,6 +1091,30 @@ def _convert_value(
                 timestamp = float(value)
                 dt = datetime.fromtimestamp(timestamp)
                 return dt.isoformat()
+            return value
+
+        elif target_type == "timestamp_to_iso_date":
+            # Convert unix timestamp to ISO date (YYYY-MM-DD)
+            if isinstance(value, str | int | float):
+                timestamp = float(value)
+                dt = datetime.fromtimestamp(timestamp)
+                return dt.strftime("%Y-%m-%d")
+            return value
+
+        elif target_type == "timestamp_to_iso_YYYY-MM":
+            # Convert unix timestamp to YYYY-MM format
+            if isinstance(value, str | int | float):
+                timestamp = float(value)
+                dt = datetime.fromtimestamp(timestamp)
+                return dt.strftime("%Y-%m")
+            return value
+
+        elif target_type == "timestamp_to_iso_YYYY":
+            # Convert unix timestamp to YYYY format
+            if isinstance(value, str | int | float):
+                timestamp = float(value)
+                dt = datetime.fromtimestamp(timestamp)
+                return dt.strftime("%Y")
             return value
 
         else:  # str or unknown type
