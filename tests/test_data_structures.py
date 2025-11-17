@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import re
 from collections.abc import Hashable
 from copy import deepcopy
@@ -7,7 +8,7 @@ from datetime import date, datetime
 
 import pytest
 
-from etlutil import move_unknown_keys_to_extra, prune_data, walk
+from etlutil import clean_dict, move_unknown_keys_to_extra, prune_data, walk
 from etlutil.data_structures import ConvertType, convert_dict_types
 
 
@@ -898,3 +899,121 @@ def test_convert_fb_api_like_data(fb_api_data):
     # Check nested conversions
     assert result["actions"][0]["value"] == 2
     assert result["actions"][1]["value"] == 1
+
+
+# ============================================================================
+# Tests for clean_dict function
+# ============================================================================
+
+
+def _sha256_str(value: str) -> str:
+    return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+CLEAN_DICT_CASES = [
+    pytest.param(
+        {
+            "password": "secret",
+            "profile": {"password": "nested-secret", "email": "user@example.com"},
+        },
+        ["password"],
+        "replace",
+        None,
+        {},
+        {
+            "password": "replaced (etl)",
+            "profile": {"password": "replaced (etl)", "email": "user@example.com"},
+        },
+        id="replace_nested",
+    ),
+    pytest.param(
+        {"token": "", "meta": {"token": "abc"}},
+        ["token"],
+        "delete",
+        None,
+        {},
+        {"token": "", "meta": {}},
+        id="delete_preserves_empty_strings",
+    ),
+    pytest.param(
+        {"secret": "value"},
+        ["secret"],
+        "empty",
+        None,
+        {},
+        {"secret": None},
+        id="empty_mode_sets_none",
+    ),
+    pytest.param(
+        {
+            "users": [
+                {"email": "secret@example.com"},
+                {"email": "second@example.com", "name": "alice"},
+            ],
+            "audit": ({"email": "tuple@example.com"}, "no-change"),
+        },
+        ["email"],
+        "hash",
+        None,
+        {},
+        {
+            "users": [
+                {"email": _sha256_str("secret@example.com")},
+                {"email": _sha256_str("second@example.com"), "name": "alice"},
+            ],
+            "audit": ({"email": _sha256_str("tuple@example.com")}, "no-change"),
+        },
+        id="hash_across_sequences",
+    ),
+    pytest.param(
+        {
+            "secret": "value",
+            "note": "0123456789ABCDE",
+            "nested": {"description": "fedcba9876543210"},
+        },
+        ["secret"],
+        "replace",
+        4,
+        {"replacement_marker": "[MASKED]", "truncation_suffix": "... trimmed"},
+        {
+            "secret": "[MAS... trimmed",
+            "note": "0123... trimmed",
+            "nested": {"description": "fedc... trimmed"},
+        },
+        id="custom_markers_and_truncation",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    "payload,keys_to_clean,clean_mode,truncate_strings,extra_kwargs,expected",
+    CLEAN_DICT_CASES,
+)
+def test_clean_dict_parametrized(payload, keys_to_clean, clean_mode, truncate_strings, extra_kwargs, expected):
+    data = deepcopy(payload)
+    kwargs = {
+        "dict_input": data,
+        "keys_to_clean": keys_to_clean,
+        "clean_mode": clean_mode,
+        "truncate_strings": truncate_strings,
+    }
+    kwargs.update(extra_kwargs)
+
+    result = clean_dict(**kwargs)
+
+    assert result == expected
+    assert data == payload  # Input data remains untouched
+
+
+def test_clean_dict_farm_fingerprint_mode():
+    farmhash = pytest.importorskip("farmhash")
+    data = {"session": "abc123"}
+
+    result = clean_dict(
+        data,
+        keys_to_clean=["session"],
+        clean_mode="farm_fingerprint",
+        truncate_strings=None,
+    )
+
+    assert result["session"] == farmhash.Fingerprint64(b"abc123")

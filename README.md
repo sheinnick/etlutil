@@ -15,6 +15,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
   - Schema-driven value conversion with `convert_dict_types` (int/float/bool/date/datetime/timestamp family)
+  - Sensitive field scrubbing with `clean_dict` (replace/hash/fingerprint/delete modes)
 - **Data Structure Visualization**:
   - Tree-style visualization and data collection via `walk`
 
@@ -653,6 +654,56 @@ result = convert_dict_types(data, schema, empty_string_to_none=True)
 - **Empty string handling** - Convert to None when needed
 - **Type safety** - Use ConvertType enum for better IDE support
 - **Error tolerance** - Non-strict mode preserves original values on errors
+
+### Sensitive Field Scrubbing (clean_dict)
+
+```python
+from etlutil import clean_dict
+
+payload = {
+    "email": "user@example.com",
+    "password": "super-secret",
+    "session": "abc123",
+    "profile": {
+        "token": "xyz987",
+        "notes": "Long note that should be truncated for previews",
+        "history": [
+            {"token": "old-token-1"},
+            {"token": None},
+        ],
+    },
+}
+
+scrubbed = clean_dict(
+    payload,
+    keys_to_clean=["password", "token", "session"],
+    clean_mode="hash",
+    truncate_strings=24,
+)
+# Result:
+# - password/session/token fields replaced with SHA256 hex digests
+# - nested dictionaries / lists processed recursively
+# - long strings end with "… truncated (etl)"
+
+# FarmHash fingerprint mode
+fingerprinted = clean_dict(
+    payload,
+    keys_to_clean=["session"],
+    clean_mode="farm_fingerprint",
+    truncate_strings=None,
+)
+# session now holds a deterministic 64-bit integer fingerprint
+```
+
+#### clean_mode options
+
+- `replace` → literal `"replaced (etl)"` marker
+- `hash` → SHA256 hex digest
+- `farm_fingerprint` → 64-bit FarmHash fingerprint (blake2b fallback if farmhash module missing)
+- `empty` → replace with `None`
+- `delete` → drop key entirely (skips empty/None values)
+
+`truncate_strings` applies to every string in the structure (including replacements), keeps container types intact, and never mutates the original dictionaries/lists/tuples.
 
 ## Contributing
 

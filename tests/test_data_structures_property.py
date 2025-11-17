@@ -8,7 +8,7 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from etlutil import move_unknown_keys_to_extra, prune_data, walk
+from etlutil import clean_dict, move_unknown_keys_to_extra, prune_data, walk
 from etlutil.data_structures import convert_dict_types
 
 # Property-based tests (skipped if hypothesis is not installed)
@@ -48,6 +48,7 @@ def recursive_data_strategy() -> st.SearchStrategy:
 
 
 DATA = recursive_data_strategy()
+DICT_DATA = st.dictionaries(keys=st.text(min_size=1, max_size=5), values=DATA, max_size=5)
 
 
 @given(DATA)
@@ -660,3 +661,72 @@ def test_convert_dict_types_property_none_and_empty_handling(data, empty_string_
         elif value == "" and not empty_string_to_none:
             # Empty string should be preserved when flag is not set
             assert result[key] == ""
+
+
+# ============================================================================
+# Property-based tests for clean_dict
+# ============================================================================
+
+
+def _iter_strings(value):
+    if isinstance(value, str):
+        yield value
+    elif isinstance(value, dict):
+        for nested in value.values():
+            yield from _iter_strings(nested)
+    elif isinstance(value, list | tuple):
+        for nested in value:
+            yield from _iter_strings(nested)
+
+
+@given(payload=DICT_DATA, keys=st.sets(st.text(min_size=1, max_size=5), max_size=3))
+def test_clean_dict_only_cleans_selected_keys(payload, keys):
+    data = deepcopy(payload)
+    result = clean_dict(
+        dict_input=data,
+        keys_to_clean=list(keys),
+        clean_mode="replace",
+        truncate_strings=None,
+    )
+
+    assert data == payload
+
+    for key, original_value in payload.items():
+        if key not in keys:
+            assert result.get(key) == original_value
+
+
+@given(payload=DICT_DATA, limit=st.integers(min_value=1, max_value=12))
+def test_clean_dict_truncation_limits(payload, limit):
+    data = deepcopy(payload)
+    result = clean_dict(
+        dict_input=data,
+        keys_to_clean=[],
+        clean_mode="replace",
+        truncate_strings=limit,
+    )
+
+    assert data == payload
+
+    suffix = "… truncated (etl)"
+    for text in _iter_strings(result):
+        assert len(text) <= limit + len(suffix)
+        if len(text) > limit:
+            assert text.endswith(suffix)
+
+
+@given(payload=DICT_DATA, keys=st.sets(st.text(min_size=1, max_size=5), max_size=3))
+def test_clean_dict_hash_mode_produces_hex(payload, keys):
+    data = deepcopy(payload)
+    result = clean_dict(
+        dict_input=data,
+        keys_to_clean=list(keys),
+        clean_mode="hash",
+        truncate_strings=None,
+    )
+
+    assert data == payload
+
+    for text in _iter_strings(result):
+        if len(text) == 64:
+            int(text, 16)

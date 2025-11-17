@@ -5,7 +5,7 @@ from collections.abc import Set as AbcSet
 
 import pytest
 
-from etlutil import move_unknown_keys_to_extra, prune_data, walk
+from etlutil import clean_dict, move_unknown_keys_to_extra, prune_data, walk
 from etlutil.data_structures import convert_dict_types
 
 
@@ -583,3 +583,40 @@ def test_convert_large_nested_structure_performance(recursive):
         # Non-recursive should leave nested values unchanged
         assert result["items"][0]["id"] == "0"  # type: ignore[index]
         assert result["items"][0]["value"] == "0"  # type: ignore[index]
+
+
+# ============================================================================
+# Edge case tests for clean_dict function
+# ============================================================================
+
+
+def test_clean_dict_invalid_mode_raises():
+    with pytest.raises(ValueError):
+        clean_dict(
+            {"secret": "value"},
+            keys_to_clean=["secret"],
+            clean_mode="unsupported",  # type: ignore[arg-type]
+            truncate_strings=None,
+        )
+
+
+def test_clean_dict_farmhash_fallback(monkeypatch):
+    from etlutil import data_structures
+
+    monkeypatch.setattr(data_structures, "_farmhash_fingerprint", None)
+
+    first = clean_dict(
+        {"session": "abc123"},
+        keys_to_clean=["session"],
+        clean_mode="farm_fingerprint",
+        truncate_strings=None,
+    )
+    second = clean_dict(
+        {"session": "abc123"},
+        keys_to_clean=["session"],
+        clean_mode="farm_fingerprint",
+        truncate_strings=None,
+    )
+
+    assert isinstance(first["session"], int)
+    assert first["session"] == second["session"]

@@ -11,11 +11,21 @@ to a separate collection while preserving whitelisted keys.
 
 from __future__ import annotations
 
+import hashlib
+import importlib
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbcSet
 from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
+
+_farmhash_fingerprint = None
+try:  # Optional dependency for farmhash fingerprinting
+    _farmhash_module = importlib.import_module("farmhash")
+except ModuleNotFoundError:  # pragma: no cover - fallback handled in _fingerprint_value
+    pass
+else:  # pragma: no cover - executed only when dependency installed
+    _farmhash_fingerprint = getattr(_farmhash_module, "Fingerprint64", None)
 
 
 def prune_data(
@@ -1123,3 +1133,131 @@ def _convert_value(
 
     except (ValueError, TypeError) as e:
         return handle_error(e)
+
+
+_DELETE_SENTINEL = object()
+
+
+def clean_dict(
+    dict_input: dict[str, Any],
+    *,
+    keys_to_clean: list[str],
+    clean_mode: Literal["replace", "hash", "farm_fingerprint", "empty", "delete"],
+    truncate_strings: int | None = None,
+    replacement_marker: str = "replaced (etl)",
+    truncation_suffix: str = "… truncated (etl)",
+) -> dict[str, Any]:
+    """
+    Recursively clean sensitive dictionary keys while preserving overall structure.
+
+    Args:
+        dict_input: Source dictionary. Input is never mutated.
+        keys_to_clean: Keys that should be cleaned when encountered at any depth.
+        clean_mode: Cleaning strategy applied to matching keys:
+            - "replace": substitute value with literal ``"replaced (etl)"``
+            - "hash": replace with SHA256 hex digest of the original value
+            - "farm_fingerprint": replace with deterministic 64-bit FarmHash fingerprint
+            - "empty": set value to ``None``
+            - "delete": drop the key from its parent dictionary
+        truncate_strings: Optional maximum length for *all* strings encountered
+            (post-cleaning included). Strings longer than the limit are truncated and
+            suffixed with ``truncation_suffix``. ``None`` or values <= 0 disable
+            truncation.
+        replacement_marker: Value used when ``clean_mode="replace"``.
+        truncation_suffix: Suffix appended to truncated strings.
+
+    Returns:
+        A new dictionary mirroring the original structure with sensitive values cleaned.
+
+    Notes:
+        - Keys not present in ``keys_to_clean`` remain untouched apart from optional string truncation
+          and recursive processing of nested containers.
+        - Empty strings and ``None`` values under targeted keys are left unchanged.
+        - Lists and tuples are processed recursively; tuples preserve their type.
+        - Non-container values other than strings are returned as-is when not cleaned.
+    """
+
+    keys_set = set(keys_to_clean)
+    truncate_limit = truncate_strings if (truncate_strings is not None and truncate_strings > 0) else None
+
+    def truncate_string(value: str) -> str:
+        if truncate_limit is None or len(value) <= truncate_limit:
+            return value
+        return value[:truncate_limit] + truncation_suffix
+
+    def process_container(value: Any) -> Any:
+        if isinstance(value, dict):
+            return process_dict(value)
+        if isinstance(value, list):
+            return [process_container(item) for item in value]
+        if isinstance(value, tuple):
+            return tuple(process_container(item) for item in value)
+        if isinstance(value, str):
+            return truncate_string(value)
+        return value
+
+    def process_dict(source: dict[str, Any]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in source.items():
+            if key in keys_set:
+                cleaned_value = apply_clean(value)
+                if cleaned_value is _DELETE_SENTINEL:
+                    continue
+                result[key] = cleaned_value
+            else:
+                result[key] = process_container(value)
+        return result
+
+    def apply_clean(value: Any) -> Any:
+        if _value_is_empty(value):
+            return process_container(value)
+
+        if clean_mode == "replace":
+            cleaned: Any = replacement_marker
+        elif clean_mode == "hash":
+            cleaned = _hash_value(value)
+        elif clean_mode == "farm_fingerprint":
+            cleaned = _fingerprint_value(value)
+        elif clean_mode == "empty":
+            cleaned = None
+        elif clean_mode == "delete":
+            return _DELETE_SENTINEL
+        else:  # pragma: no cover - Literal guards valid modes
+            raise ValueError(f"Unsupported clean_mode: {clean_mode}")
+
+        if isinstance(cleaned, str):
+            return truncate_string(cleaned)
+        return cleaned
+
+    return process_dict(dict_input)
+
+
+def _value_is_empty(value: Any) -> bool:
+    """Return True if value should skip cleaning (None or empty container/string)."""
+    if value is None:
+        return True
+    if isinstance(value, str):
+        return value == ""
+    if isinstance(value, list | tuple | dict | set):
+        return len(value) == 0
+    return False
+
+
+def _value_to_bytes(value: Any) -> bytes:
+    if isinstance(value, bytes):
+        return value
+    if isinstance(value, str):
+        return value.encode("utf-8")
+    return repr(value).encode("utf-8")
+
+
+def _hash_value(value: Any) -> str:
+    return hashlib.sha256(_value_to_bytes(value)).hexdigest()
+
+
+def _fingerprint_value(value: Any) -> int:
+    data = _value_to_bytes(value)
+    if _farmhash_fingerprint is not None:  # pragma: no branch - simple availability check
+        return _farmhash_fingerprint(data)
+    digest = hashlib.blake2b(data, digest_size=8).digest()
+    return int.from_bytes(digest, "big", signed=False)
