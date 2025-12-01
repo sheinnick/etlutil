@@ -39,6 +39,63 @@ pip install "etlutil[dev] @ git+https://github.com/sheinnick/etlutil.git"
 uv add git+https://github.com/sheinnick/etlutil.git
 ```
 
+## Development
+
+### Setup Development Environment
+
+```bash
+# Clone repository
+git clone https://github.com/sheinnick/etlutil.git
+cd etlutil
+
+# Install with uv
+uv sync --extra dev
+```
+
+### Running Tests
+
+```bash
+# Install dev deps
+uv sync --extra dev
+
+# Run all tests
+uv run pytest
+
+# Run tests with coverage
+uv run pytest --cov=etlutil
+
+# Run a specific file / test
+uv run pytest tests/test_data_structures.py::test_keep_only_int_keys -q
+
+# Run tests by keyword
+uv run pytest -k "email or import_prefix" -q
+
+# Re-run only last failures
+uv run pytest --last-failed -q
+
+# Verbose output and shorter tracebacks
+uv run pytest -vv --tb=short
+
+# Coverage
+uv run pytest --cov=etlutil --cov-report=term-missing
+
+# Property-based tests (optional)
+# If Hypothesis не установлен, файл пропускается автоматически.
+uv run pytest tests/test_data_structures_property.py -q
+
+```
+
+### Code Quality
+
+```bash
+# Format and lint code
+uv run ruff check --fix etlutil/ tests/
+uv run ruff format etlutil/ tests/
+
+# Or run both at once
+uv run ruff check etlutil/ tests/
+```
+
 ## Quick Start
 
 ### Data Cleaning (prune_data)
@@ -496,63 +553,6 @@ All date functions support flexible input types (`DateLike`):
 
 The library automatically converts between types as needed, extracting date components from datetime objects and parsing ISO strings.
 
-## Development
-
-### Setup Development Environment
-
-```bash
-# Clone repository
-git clone https://github.com/sheinnick/etlutil.git
-cd etlutil
-
-# Install with uv
-uv sync --extra dev
-```
-
-### Running Tests
-
-```bash
-# Install dev deps
-uv sync --extra dev
-
-# Run all tests
-uv run pytest
-
-# Run tests with coverage
-uv run pytest --cov=etlutil
-
-# Run a specific file / test
-uv run pytest tests/test_data_structures.py::test_keep_only_int_keys -q
-
-# Run tests by keyword
-uv run pytest -k "email or import_prefix" -q
-
-# Re-run only last failures
-uv run pytest --last-failed -q
-
-# Verbose output and shorter tracebacks
-uv run pytest -vv --tb=short
-
-# Coverage
-uv run pytest --cov=etlutil --cov-report=term-missing
-
-# Property-based tests (optional)
-# If Hypothesis не установлен, файл пропускается автоматически.
-uv run pytest tests/test_data_structures_property.py -q
-
-```
-
-### Code Quality
-
-```bash
-# Format and lint code
-uv run ruff check --fix etlutil/ tests/
-uv run ruff format etlutil/ tests/
-
-# Or run both at once
-uv run ruff check etlutil/ tests/
-```
-
 ### Type Conversion
 
 Convert dictionary values to proper Python types based on a schema. Essential for ETL workflows where data comes as strings from APIs, CSVs, or databases.
@@ -704,6 +704,37 @@ fingerprinted = clean_dict(
 - `delete` → drop key entirely (skips empty/None values)
 
 `truncate_strings` applies to every string in the structure (including replacements), keeps container types intact, and never mutates the original dictionaries/lists/tuples.
+
+#### skip_rules allowlists
+
+`skip_rules` let you short-circuit cleaning for matching values while still processing nested containers and global truncation. Each entry is a key name mapped to one or many rule specs:
+
+- bare strings → case-sensitive suffix checks (most common email allowlist)
+- callables → custom predicates returning True to keep the original value
+- dict specs with a `match` key:
+  - `"suffix"` / `"prefix"` / `"equals"` expect a `value`
+  - `"regex"` expects a `pattern` (compiled without extra flags)
+  - `"callable"` expects a `func`
+
+Example — keep emails in three domains and specific session tokens:
+
+```python
+clean_dict(
+    payload,
+    keys_to_clean=["email", "session"],
+    clean_mode="replace",
+    skip_rules={
+        "email": [
+            "@qweqwe.qwe",
+            "@asdasdasd.asd",
+            "@zxczxczxc/zxc",
+        ],
+        "session": {"match": "prefix", "value": "keep-"},
+    },
+)
+```
+
+All other `email`/`session` values are scrubbed according to `clean_mode`.
 
 ## Contributing
 

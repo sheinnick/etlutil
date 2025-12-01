@@ -1017,3 +1017,28 @@ def test_clean_dict_farm_fingerprint_mode():
     )
 
     assert result["session"] == farmhash.Fingerprint64(b"abc123")
+
+
+def test_clean_dict_skip_rules_allowlist():
+    data = {
+        "email": "user@qweqwe.asd",
+        "profile": {"email": "blocked@example.com"},
+        "token": "keep-123",
+        "audit": {"token": "drop-1"},
+    }
+
+    result = clean_dict(
+        dict_input=data,
+        keys_to_clean=["email", "token"],
+        clean_mode="replace",
+        skip_rules={
+            "email": "@qweqwe.asd",
+            "token": [{"match": "regex", "pattern": r"^keep-"}],
+        },
+        truncate_strings=None,
+    )
+
+    assert result["email"] == "user@qweqwe.asd"
+    assert result["profile"]["email"] == "replaced (etl)"
+    assert result["token"] == "keep-123"
+    assert result["audit"]["token"] == "replaced (etl)"

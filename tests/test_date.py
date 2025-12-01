@@ -1,8 +1,16 @@
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 
 import pytest
 
-from etlutil.date import DateRange, DateRanges, format_year_month, generate_date_array, get_relative_date_frame, to_date, to_date_iso_str
+from etlutil.date import (
+    DateRange,
+    DateRanges,
+    format_year_month,
+    generate_date_array,
+    get_relative_date_frame,
+    to_date,
+    to_date_iso_str,
+)
 
 
 # ==================== FIXTURES ====================
@@ -74,41 +82,44 @@ class TestToDate:
             "not-a-date",
             "2024-13-01",  # Invalid month
             "2024-02-30",  # Invalid day
-            "24-01-01",    # Wrong format
-            "",            # Empty string
-            "2024-1-1",    # Missing zero padding
+            "24-01-01",  # Wrong format
+            "",  # Empty string
+            "2024-1-1",  # Missing zero padding
         ]
-        
+
         for invalid in invalid_dates:
             with pytest.raises(ValueError):
                 to_date(invalid)
 
     def test_datetime_with_timezone_info(self):
         """Test datetime with timezone info extracts date correctly."""
-        from datetime import timezone, timedelta
-        
+        from datetime import timedelta, timezone
+
         # UTC datetime
-        dt_utc = datetime(2024, 1, 15, 12, 30, tzinfo=timezone.utc)
+        dt_utc = datetime(2024, 1, 15, 12, 30, tzinfo=UTC)
         assert to_date(dt_utc) == date(2024, 1, 15)
-        
+
         # Different timezone
         tz_offset = timezone(timedelta(hours=3))
         dt_tz = datetime(2024, 1, 15, 12, 30, tzinfo=tz_offset)
         assert to_date(dt_tz) == date(2024, 1, 15)
 
-    @pytest.mark.parametrize("year,month,day", [
-        (2024, 1, 1),    # Start of year
-        (2024, 12, 31),  # End of year
-        (2024, 2, 29),   # Leap year day
-        (2023, 2, 28),   # Non-leap year Feb end
-        (2024, 6, 15),   # Mid year
-    ])
+    @pytest.mark.parametrize(
+        "year,month,day",
+        [
+            (2024, 1, 1),  # Start of year
+            (2024, 12, 31),  # End of year
+            (2024, 2, 29),  # Leap year day
+            (2023, 2, 28),  # Non-leap year Feb end
+            (2024, 6, 15),  # Mid year
+        ],
+    )
     def test_date_consistency_across_types(self, year, month, day):
         """Test that all input types produce same date."""
         expected = date(year, month, day)
         dt = datetime(year, month, day, 14, 30, 45)
         iso_str = f"{year:04d}-{month:02d}-{day:02d}"
-        
+
         assert to_date(expected) == expected
         assert to_date(dt) == expected
         assert to_date(iso_str) == expected
@@ -140,7 +151,7 @@ class TestToDateIsoStr:
         dt = datetime(2024, 3, 15, 12, 30)
         d = date(2024, 3, 15)
         s = "2024-03-15"
-        
+
         expected = "2024-03-15"
         assert to_date_iso_str(dt) == expected
         assert to_date_iso_str(d) == expected
@@ -148,19 +159,21 @@ class TestToDateIsoStr:
 
     def test_timezone_datetime_extraction(self):
         """Test that timezone info is ignored, only date part extracted."""
-        from datetime import timezone
-        
-        dt_utc = datetime(2024, 1, 15, 23, 59, tzinfo=timezone.utc)
+
+        dt_utc = datetime(2024, 1, 15, 23, 59, tzinfo=UTC)
         result = to_date_iso_str(dt_utc)
         assert result == "2024-01-15"
 
-    @pytest.mark.parametrize("input_date,expected", [
-        (date(2024, 1, 1), "2024-01-01"),
-        (date(2024, 12, 31), "2024-12-31"),
-        (date(2024, 2, 29), "2024-02-29"),  # Leap year
-        (datetime(2024, 6, 15, 14, 30), "2024-06-15"),
-        ("2024-03-15", "2024-03-15"),
-    ])
+    @pytest.mark.parametrize(
+        "input_date,expected",
+        [
+            (date(2024, 1, 1), "2024-01-01"),
+            (date(2024, 12, 31), "2024-12-31"),
+            (date(2024, 2, 29), "2024-02-29"),  # Leap year
+            (datetime(2024, 6, 15, 14, 30), "2024-06-15"),
+            ("2024-03-15", "2024-03-15"),
+        ],
+    )
     def test_parametrized_conversions(self, input_date, expected):
         """Test various input/output combinations."""
         result = to_date_iso_str(input_date)
@@ -174,7 +187,7 @@ class TestToDateIsoStr:
             date(2024, 12, 31),
             date(2023, 2, 28),  # Non-leap year
         ]
-        
+
         for d in original_dates:
             iso_str = to_date_iso_str(d)
             roundtrip = to_date(iso_str)
@@ -1273,15 +1286,15 @@ class TestUncoveredLines:
         # Create range that ends in December to trigger year rollover logic
         dr = DateRange("2024-12-15", "2024-12-31")
         extended = dr.extend_to_month_bounds()
-        
+
         # Should extend to full December month
         assert extended.date_start == "2024-12-01"
         assert extended.date_end == "2024-12-31"
-        
+
         # Test with range spanning into December
         dr_span = DateRange("2024-11-15", "2024-12-15")
         extended_span = dr_span.extend_to_month_bounds()
-        
+
         # Should span November to December
         assert extended_span.date_start == "2024-11-01"
         assert extended_span.date_end == "2024-12-31"
@@ -1289,22 +1302,22 @@ class TestUncoveredLines:
     def test_offset_range_buckets_date_trimming(self):
         """Test line 735: date trimming in offset_range_buckets."""
         generator = DateRanges()
-        
+
         # Create scenario where period end exceeds date_end to force trimming
         ranges = generator.offset_range_buckets(
             "WEEK",
             offset_start=0,
             offset_end=-2,
-            date_end="2024-01-03"  # Mid-week date to force trimming
+            date_end="2024-01-03",  # Mid-week date to force trimming
         )
-        
+
         # Current week should be trimmed to date_end
         assert len(ranges) == 3  # 0, -1, -2 offsets
-        
+
         # First range (current week) should be trimmed
         current_week = ranges[0]
         assert current_week.date_end == "2024-01-03"  # Trimmed to date_end
-        
+
         # Previous weeks should not be affected by trimming
         prev_week = ranges[1]
         assert prev_week.date_end != "2024-01-03"  # Not trimmed
@@ -1317,34 +1330,36 @@ class TestPerformance:
     def test_date_utilities_performance_large_dataset(self):
         """Test performance with large datasets."""
         import time
-        
+
         # Create large mixed dataset
         dates = []
         for i in range(1000):
-            dates.extend([
-                f"2024-{(i % 12) + 1:02d}-15",
-                datetime(2024, (i % 12) + 1, 15, 12, 30),
-                date(2024, (i % 12) + 1, 15),
-            ])
-        
+            dates.extend(
+                [
+                    f"2024-{(i % 12) + 1:02d}-15",
+                    datetime(2024, (i % 12) + 1, 15, 12, 30),
+                    date(2024, (i % 12) + 1, 15),
+                ]
+            )
+
         # Test to_date performance
         start = time.time()
         results_to_date = [to_date(d) for d in dates]
         to_date_duration = time.time() - start
-        
+
         # Test to_date_iso_str performance
         start = time.time()
         results_to_iso = [to_date_iso_str(d) for d in dates]
         to_iso_duration = time.time() - start
-        
+
         # Should complete reasonably fast
         assert to_date_duration < 1.0  # Less than 1 second
-        assert to_iso_duration < 1.0   # Less than 1 second
-        
+        assert to_iso_duration < 1.0  # Less than 1 second
+
         # Results should be correct length
         assert len(results_to_date) == len(dates)
         assert len(results_to_iso) == len(dates)
-        
+
         # All results should be proper types
         assert all(isinstance(d, date) for d in results_to_date)
         assert all(isinstance(s, str) for s in results_to_iso)
@@ -1352,21 +1367,21 @@ class TestPerformance:
     def test_date_range_splitting_performance(self):
         """Test performance of date range splitting with large ranges."""
         import time
-        
+
         # Create large date range (1 year)
         dr = DateRange("2024-01-01", "2024-12-31")
-        
+
         start = time.time()
         chunks = dr.split(7)  # Weekly chunks for whole year
         duration = time.time() - start
-        
+
         # Should complete quickly
         assert duration < 0.1  # Less than 100ms
-        
+
         # Should have correct number of chunks (52+ weeks)
         assert len(chunks) >= 52
         assert len(chunks) <= 54  # Account for partial weeks
-        
+
         # All chunks should be valid DateRange objects
         assert all(isinstance(chunk, DateRange) for chunk in chunks)
 
@@ -1384,7 +1399,7 @@ class TestRealWorldScenarios:
             {"id": 3, "created_at": date(2024, 1, 17), "event": "logout"},
             {"id": 4, "created_at": "2024-01-18", "event": "signup"},
         ]
-        
+
         # Normalize all dates to ISO strings
         normalized = []
         for item in api_data:
@@ -1392,12 +1407,12 @@ class TestRealWorldScenarios:
             item_copy["date"] = to_date_iso_str(item["created_at"])
             item_copy["date_obj"] = to_date(item["created_at"])
             normalized.append(item_copy)
-        
+
         # All should have consistent date format
         expected_dates = ["2024-01-15", "2024-01-16", "2024-01-17", "2024-01-18"]
         actual_dates = [item["date"] for item in normalized]
         assert actual_dates == expected_dates
-        
+
         # All date objects should be proper date type
         date_objects = [item["date_obj"] for item in normalized]
         assert all(isinstance(d, date) for d in date_objects)
@@ -1407,10 +1422,10 @@ class TestRealWorldScenarios:
         """Test complete ETL workflow using DateRange utilities."""
         # Simulate ETL scenario: process data in weekly chunks
         generator = DateRanges()
-        
+
         # Get last 4 weeks of data
         weeks = generator.calendar_periods("WEEK", count=4, date_end="2024-01-28")
-        
+
         # Process each week
         processed_weeks = []
         for week in weeks:
@@ -1423,10 +1438,10 @@ class TestRealWorldScenarios:
                 "days_count": week.days_count(),
             }
             processed_weeks.append(week_data)
-        
+
         # Should have 4 weeks
         assert len(processed_weeks) == 4
-        
+
         # Each week should have all required formats
         for week_data in processed_weeks:
             assert "range_str" in week_data
@@ -1434,6 +1449,6 @@ class TestRealWorldScenarios:
             assert "fb_format" in week_data
             assert "timestamps" in week_data
             assert "days_count" in week_data
-            
+
             # Days count should be 7 for complete weeks
             assert week_data["days_count"] == 7

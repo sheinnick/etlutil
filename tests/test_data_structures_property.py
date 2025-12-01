@@ -679,12 +679,35 @@ def _iter_strings(value):
             yield from _iter_strings(nested)
 
 
+def _contains_target_key(value, key_set):
+    """Return True if any dict in value contains a string key from key_set."""
+    if isinstance(value, dict):
+        for nested_key, nested_value in value.items():
+            if isinstance(nested_key, str) and nested_key in key_set:
+                return True
+            if _contains_target_key(nested_value, key_set):
+                return True
+        return False
+    if isinstance(value, list | tuple):
+        for nested in value:
+            if _contains_target_key(nested, key_set):
+                return True
+        return False
+    if isinstance(value, set | frozenset):
+        for nested in value:
+            if _contains_target_key(nested, key_set):
+                return True
+        return False
+    return False
+
+
 @given(payload=DICT_DATA, keys=st.sets(st.text(min_size=1, max_size=5), max_size=3))
 def test_clean_dict_only_cleans_selected_keys(payload, keys):
     data = deepcopy(payload)
+    key_set = set(keys)
     result = clean_dict(
         dict_input=data,
-        keys_to_clean=list(keys),
+        keys_to_clean=list(key_set),
         clean_mode="replace",
         truncate_strings=None,
     )
@@ -692,8 +715,11 @@ def test_clean_dict_only_cleans_selected_keys(payload, keys):
     assert data == payload
 
     for key, original_value in payload.items():
-        if key not in keys:
-            assert result.get(key) == original_value
+        if key in key_set:
+            continue
+        if _contains_target_key(original_value, key_set):
+            continue
+        assert result.get(key) == original_value
 
 
 @given(payload=DICT_DATA, limit=st.integers(min_value=1, max_value=12))

@@ -13,11 +13,12 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import re
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbcSet
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal
+from typing import Any, Literal, TypedDict
 
 _farmhash_fingerprint = None
 try:  # Optional dependency for farmhash fingerprinting
@@ -1138,11 +1139,30 @@ def _convert_value(
 _DELETE_SENTINEL = object()
 
 
+SkipRuleMatchType = Literal["suffix", "prefix", "equals", "regex", "callable"]
+SkipRulePredicate = Callable[[Any], bool]
+
+
+class SkipRuleConfig(TypedDict, total=False):
+    """Dictionary-based skip rule description for clean_dict."""
+
+    match: SkipRuleMatchType
+    value: Any
+    pattern: str
+    func: SkipRulePredicate
+
+
+SkipRuleSpec = SkipRuleConfig | SkipRulePredicate | str
+SkipRuleEntry = SkipRuleSpec | Sequence[SkipRuleSpec | None] | None
+SkipRuleMap = Mapping[str, SkipRuleEntry]
+
+
 def clean_dict(
     dict_input: dict[str, Any],
     *,
     keys_to_clean: list[str],
     clean_mode: Literal["replace", "hash", "farm_fingerprint", "empty", "delete"],
+    skip_rules: SkipRuleMap | None = None,
     truncate_strings: int | None = None,
     replacement_marker: str = "replaced (etl)",
     truncation_suffix: str = "… truncated (etl)",
@@ -1159,6 +1179,26 @@ def clean_dict(
             - "farm_fingerprint": replace with deterministic 64-bit FarmHash fingerprint
             - "empty": set value to ``None``
             - "delete": drop the key from its parent dictionary
+        skip_rules: Optional mapping describing allowlist masks per key. For every target key
+            provide one or more rule specs (single value or sequence). Accepted spec forms:
+              * ``str`` — interpreted as suffix; ``"@corp.com"`` keeps emails ending with it.
+              * ``Callable[[Any], bool]`` — return True to keep the original value.
+              * ``SkipRuleConfig`` dictionaries with ``match`` key:
+                    - ``"suffix"`` → requires ``value`` (string suffix)
+                    - ``"prefix"`` → requires ``value`` (string prefix)
+                    - ``"equals"`` → requires ``value`` (compared via ``==``)
+                    - ``"regex"`` → requires ``pattern`` (compiled as-is, no regex flags)
+                    - ``"callable"`` → requires ``func`` (callable predicate)
+            Example::
+                skip_rules={
+                    "email": [
+                        "@corp.one",
+                        "@corp.two",
+                        {"match": "regex", "pattern": r"@partners\\.(com|net)$"},
+                    ],
+                    "token": {"match": "prefix", "value": "allowlist-"},
+                }
+            Empty or ``None`` entries are ignored.
         truncate_strings: Optional maximum length for *all* strings encountered
             (post-cleaning included). Strings longer than the limit are truncated and
             suffixed with ``truncation_suffix``. ``None`` or values <= 0 disable
@@ -1179,6 +1219,7 @@ def clean_dict(
 
     keys_set = set(keys_to_clean)
     truncate_limit = truncate_strings if (truncate_strings is not None and truncate_strings > 0) else None
+    skip_predicates = _build_skip_predicates(skip_rules)
 
     def truncate_string(value: str) -> str:
         if truncate_limit is None or len(value) <= truncate_limit:
@@ -1199,13 +1240,18 @@ def clean_dict(
     def process_dict(source: dict[str, Any]) -> dict[str, Any]:
         result: dict[str, Any] = {}
         for key, value in source.items():
-            if key in keys_set:
-                cleaned_value = apply_clean(value)
-                if cleaned_value is _DELETE_SENTINEL:
-                    continue
-                result[key] = cleaned_value
-            else:
+            if key not in keys_set:
                 result[key] = process_container(value)
+                continue
+
+            if _should_skip_cleaning(key, value, skip_predicates):
+                result[key] = process_container(value)
+                continue
+
+            cleaned_value = apply_clean(value)
+            if cleaned_value is _DELETE_SENTINEL:
+                continue
+            result[key] = cleaned_value
         return result
 
     def apply_clean(value: Any) -> Any:
@@ -1261,3 +1307,91 @@ def _fingerprint_value(value: Any) -> int:
         return _farmhash_fingerprint(data)
     digest = hashlib.blake2b(data, digest_size=8).digest()
     return int.from_bytes(digest, "big", signed=False)
+
+
+def _build_skip_predicates(skip_rules: SkipRuleMap | None) -> dict[str, list[Callable[[Any], bool]]]:
+    """Normalize skip_rules into per-key predicate lists."""
+    if skip_rules is None:
+        return {}
+    if not isinstance(skip_rules, Mapping):
+        raise TypeError("skip_rules must be a mapping of key -> rule specifications")
+
+    compiled: dict[str, list[Callable[[Any], bool]]] = {}
+    for key, raw_rules in skip_rules.items():
+        if raw_rules is None:
+            continue
+
+        if isinstance(raw_rules, Sequence) and not isinstance(raw_rules, str | bytes):
+            rule_specs = list(raw_rules)
+        else:
+            rule_specs = [raw_rules]
+
+        predicates = []
+        for spec in rule_specs:
+            if spec is None:
+                continue
+            predicates.append(_compile_skip_rule(spec, key))
+
+        if predicates:
+            compiled[key] = predicates
+
+    return compiled
+
+
+def _compile_skip_rule(rule_spec: SkipRuleSpec, key_name: str) -> Callable[[Any], bool]:
+    """Compile single rule spec into predicate callable."""
+    if callable(rule_spec):
+        return lambda value, fn=rule_spec: bool(fn(value))
+
+    if isinstance(rule_spec, str):
+        suffix = rule_spec
+        return lambda value, s=suffix: isinstance(value, str) and value.endswith(s)
+
+    if not isinstance(rule_spec, Mapping):
+        raise TypeError(
+            f"skip_rules[{key_name}] entries must be str, callable, or mapping-based SkipRuleConfig objects"
+        )
+
+    match_type = rule_spec.get("match")
+    if match_type not in {"suffix", "prefix", "equals", "regex", "callable"}:
+        raise ValueError(f"Unsupported skip rule match type: {match_type!r} for key {key_name!r}")
+
+    if match_type == "suffix":
+        suffix = rule_spec.get("value")
+        if not isinstance(suffix, str):
+            raise TypeError(f"suffix skip rule for key {key_name!r} requires string 'value'")
+        return lambda value, s=suffix: isinstance(value, str) and value.endswith(s)
+
+    if match_type == "prefix":
+        prefix = rule_spec.get("value")
+        if not isinstance(prefix, str):
+            raise TypeError(f"prefix skip rule for key {key_name!r} requires string 'value'")
+        return lambda value, p=prefix: isinstance(value, str) and value.startswith(p)
+
+    if match_type == "equals":
+        expected = rule_spec.get("value")
+        return lambda value, expected_value=expected: value == expected_value
+
+    if match_type == "regex":
+        pattern = rule_spec.get("pattern")
+        if not isinstance(pattern, str):
+            raise TypeError(f"regex skip rule for key {key_name!r} requires string 'pattern'")
+        compiled = re.compile(pattern)
+        return lambda value, regex=compiled: isinstance(value, str) and bool(regex.search(value))
+
+    # match_type == "callable"
+    func = rule_spec.get("func")
+    if not callable(func):
+        raise TypeError(f"callable skip rule for key {key_name!r} requires callable 'func'")
+    return lambda value, fn=func: bool(fn(value))
+
+
+def _should_skip_cleaning(key: str, value: Any, skip_predicates: Mapping[str, list[Callable[[Any], bool]]]) -> bool:
+    """Return True if key/value matches any skip predicate."""
+    predicates = skip_predicates.get(key)
+    if not predicates:
+        return False
+    for predicate in predicates:
+        if predicate(value):
+            return True
+    return False

@@ -620,3 +620,14 @@ def test_clean_dict_farmhash_fallback(monkeypatch):
 
     assert isinstance(first["session"], int)
     assert first["session"] == second["session"]
+
+
+def test_clean_dict_skip_rules_invalid_spec():
+    with pytest.raises(ValueError):
+        clean_dict(
+            {"email": "user@example.com"},
+            keys_to_clean=["email"],
+            clean_mode="replace",
+            skip_rules={"email": {"match": "unknown", "value": "x"}},
+            truncate_strings=None,
+        )
