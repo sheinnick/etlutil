@@ -155,7 +155,9 @@ def generate_date_array(
     return date_list
 
 
-def get_relative_date_frame(date_part: DatePart = "MONTH", n: int = 0, *, date_from: DateLike | None = None):
+def get_relative_date_frame(
+    date_part: DatePart = "MONTH", n: int = 0, *, date_from: DateLike | None = None
+) -> tuple[str, str]:
     """
     Args:
         date_part: Date part - DAY, WEEK, MONTH, QUARTER, or YEAR (default MONTH)
@@ -198,6 +200,10 @@ def get_relative_date_frame(date_part: DatePart = "MONTH", n: int = 0, *, date_f
             date_base = pendulum.instance(date_from)
     else:
         date_base = pendulum.today()
+
+    # Narrow union returned by pendulum stubs (Date | Time | Duration | DateTime)
+    # down to the date-like types that support .add/.start_of/.replace.
+    assert isinstance(date_base, pendulum.DateTime | pendulum.Date)
 
     match date_part:
         case "DAY":
@@ -283,11 +289,13 @@ class DateRange:
             object.__setattr__(self, "date_end", today)
         elif date_end is None:
             # DateRange(date) → date to date (single day)
+            assert date_start is not None
             start_str = to_date_iso_str(date_start)
             object.__setattr__(self, "date_start", start_str)
             object.__setattr__(self, "date_end", start_str)
         else:
             # DateRange(start, end) → start to end
+            assert date_start is not None
             object.__setattr__(self, "date_start", to_date_iso_str(date_start))
             object.__setattr__(self, "date_end", to_date_iso_str(date_end))
 
@@ -634,7 +642,7 @@ class DateRanges:
         5
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         """Initialize DateRanges generator."""
         pass
 
