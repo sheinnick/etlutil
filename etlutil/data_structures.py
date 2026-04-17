@@ -161,7 +161,7 @@ def prune_data(
             try:
                 if isinstance(obj, dict):
                     return dict(result_items)
-                return obj.__class__(result_items)
+                return obj.__class__(result_items)  # type: ignore[call-arg]
             except Exception:
                 return dict(result_items)
 
@@ -1347,7 +1347,7 @@ def _hash_value(value: Any) -> str:
 def _fingerprint_value(value: Any) -> int:
     data = _value_to_bytes(value)
     if _farmhash_fingerprint is not None:  # pragma: no branch - simple availability check
-        return _farmhash_fingerprint(data)
+        return int(_farmhash_fingerprint(data))
     digest = hashlib.blake2b(data, digest_size=8).digest()
     return int.from_bytes(digest, "big", signed=False)
 
@@ -1384,11 +1384,20 @@ def _build_skip_predicates(skip_rules: SkipRuleMap | None) -> dict[str, list[Cal
 def _compile_skip_rule(rule_spec: SkipRuleSpec, key_name: str) -> Callable[[Any], bool]:
     """Compile single rule spec into predicate callable."""
     if callable(rule_spec):
-        return lambda value, fn=rule_spec: bool(fn(value))
+        fn = rule_spec
+
+        def _callable_pred(value: Any) -> bool:
+            return bool(fn(value))
+
+        return _callable_pred
 
     if isinstance(rule_spec, str):
-        suffix = rule_spec
-        return lambda value, s=suffix: isinstance(value, str) and value.endswith(s)
+        suffix_str = rule_spec
+
+        def _suffix_str_pred(value: Any) -> bool:
+            return isinstance(value, str) and value.endswith(suffix_str)
+
+        return _suffix_str_pred
 
     if not isinstance(rule_spec, Mapping):
         raise TypeError(
@@ -1400,33 +1409,55 @@ def _compile_skip_rule(rule_spec: SkipRuleSpec, key_name: str) -> Callable[[Any]
         raise ValueError(f"Unsupported skip rule match type: {match_type!r} for key {key_name!r}")
 
     if match_type == "suffix":
-        suffix = rule_spec.get("value")
-        if not isinstance(suffix, str):
+        suffix_raw = rule_spec.get("value")
+        if not isinstance(suffix_raw, str):
             raise TypeError(f"suffix skip rule for key {key_name!r} requires string 'value'")
-        return lambda value, s=suffix: isinstance(value, str) and value.endswith(s)
+        suffix = suffix_raw
+
+        def _suffix_pred(value: Any) -> bool:
+            return isinstance(value, str) and value.endswith(suffix)
+
+        return _suffix_pred
 
     if match_type == "prefix":
-        prefix = rule_spec.get("value")
-        if not isinstance(prefix, str):
+        prefix_raw = rule_spec.get("value")
+        if not isinstance(prefix_raw, str):
             raise TypeError(f"prefix skip rule for key {key_name!r} requires string 'value'")
-        return lambda value, p=prefix: isinstance(value, str) and value.startswith(p)
+        prefix = prefix_raw
+
+        def _prefix_pred(value: Any) -> bool:
+            return isinstance(value, str) and value.startswith(prefix)
+
+        return _prefix_pred
 
     if match_type == "equals":
         expected = rule_spec.get("value")
-        return lambda value, expected_value=expected: value == expected_value
+
+        def _equals_pred(value: Any) -> bool:
+            return bool(value == expected)
+
+        return _equals_pred
 
     if match_type == "regex":
         pattern = rule_spec.get("pattern")
         if not isinstance(pattern, str):
             raise TypeError(f"regex skip rule for key {key_name!r} requires string 'pattern'")
-        compiled = re.compile(pattern)
-        return lambda value, regex=compiled: isinstance(value, str) and bool(regex.search(value))
+        regex = re.compile(pattern)
+
+        def _regex_pred(value: Any) -> bool:
+            return isinstance(value, str) and bool(regex.search(value))
+
+        return _regex_pred
 
     # match_type == "callable"
-    func = rule_spec.get("func")
-    if not callable(func):
+    callable_fn = rule_spec.get("func")
+    if not callable(callable_fn):
         raise TypeError(f"callable skip rule for key {key_name!r} requires callable 'func'")
-    return lambda value, fn=func: bool(fn(value))
+
+    def _callable_mapping_pred(value: Any) -> bool:
+        return bool(callable_fn(value))
+
+    return _callable_mapping_pred
 
 
 def _should_skip_cleaning(key: str, value: Any, skip_predicates: Mapping[str, list[Callable[[Any], bool]]]) -> bool:
