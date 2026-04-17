@@ -308,7 +308,7 @@ class DateRange:
     def as_list(self) -> list[str]:
         return [self.date_start, self.date_end]
 
-    def as_dict(self) -> dict:
+    def as_dict(self) -> dict[str, str]:
         return {"date_start": self.date_start, "date_end": self.date_end}
 
     def format(self, template: str = "{start} -> {end}") -> str:

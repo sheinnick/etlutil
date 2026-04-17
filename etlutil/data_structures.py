@@ -18,7 +18,7 @@ from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbcSet
 from datetime import datetime
 from enum import Enum
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal, TypedDict, cast
 
 _farmhash_fingerprint = None
 try:  # Optional dependency for farmhash fingerprinting
@@ -73,7 +73,7 @@ def prune_data(
         if obj is None:
             return (lambda _x: False, True)
         if callable(obj):
-            return (obj, False)
+            return (cast(Callable[[Any], bool], obj), False)
         try:
             items = list(obj)
         except TypeError as err:
@@ -652,14 +652,14 @@ def _render_value(value: Any, *, quote_strings: bool, truncate_value_len: int | 
 
 
 def move_unknown_keys_to_extra(
-    data: dict,
+    data: dict[Any, Any],
     allowed_keys: Iterable[Hashable],
     *,
     extra_key: str = "extra_collected",
     always_add_extra: bool = False,
     preserve_order: bool = False,
     fill_missing: bool = False,
-) -> tuple[dict, list[str]]:
+) -> tuple[dict[str, Any], list[str]]:
     """Move unknown keys from dict to extra collection, keeping only whitelisted keys.
 
     Args:
@@ -823,7 +823,7 @@ def move_unknown_keys_to_extra(
     return result, sorted(moved_keys)
 
 
-def _resolve_key_collisions(data: dict) -> dict[str, Any]:
+def _resolve_key_collisions(data: dict[Any, Any]) -> dict[str, Any]:
     """Resolve key name collisions after str() conversion.
 
     Key collision resolution logic:
@@ -1364,15 +1364,17 @@ def _build_skip_predicates(skip_rules: SkipRuleMap | None) -> dict[str, list[Cal
         if raw_rules is None:
             continue
 
+        # Pylance can't narrow the SkipRuleEntry union fully (it keeps bytes
+        # in the element/scalar types because str is a Sequence), so cast
+        # the normalized list once on each branch.
+        rule_specs: list[SkipRuleSpec]
         if isinstance(raw_rules, Sequence) and not isinstance(raw_rules, str | bytes):
-            rule_specs = list(raw_rules)
+            rule_specs = cast("list[SkipRuleSpec]", [s for s in raw_rules if s is not None])
         else:
-            rule_specs = [raw_rules]
+            rule_specs = cast("list[SkipRuleSpec]", [raw_rules])
 
         predicates = []
         for spec in rule_specs:
-            if spec is None:
-                continue
             predicates.append(_compile_skip_rule(spec, key))
 
         if predicates:
@@ -1472,14 +1474,14 @@ def _should_skip_cleaning(key: str, value: Any, skip_predicates: Mapping[str, li
 
 
 def flatten_dict(
-    data: dict,
+    data: dict[Any, Any],
     *,
     sep: str = "__",
     keys_to_flat: Iterable[Hashable] | None = None,
     keys_to_skip: Iterable[Hashable] = (),
     max_depth: int | None = None,
     keep_original: bool = False,
-) -> dict:
+) -> dict[Any, Any]:
     """Recursively flatten nested dictionaries by joining keys with `sep`.
 
     Nested dicts collapse into the parent: a value of `{"a": {"b": 1}}` becomes
@@ -1551,8 +1553,8 @@ def flatten_dict(
     skip_set = set(keys_to_skip)
     flat_set = set(keys_to_flat) if keys_to_flat is not None else None
 
-    def _flatten(d: Mapping, depth_remaining: int | None) -> dict:
-        result: dict = {}
+    def _flatten(d: Mapping[Any, Any], depth_remaining: int | None) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
         for k, v in d.items():
             should_flatten = (
                 isinstance(v, Mapping)
@@ -1592,14 +1594,14 @@ class DateFieldRule(TypedDict, total=False):
 
 
 def normalize_date_fields(
-    data: dict,
+    data: dict[Any, Any],
     rules: Iterable[DateFieldRule],
     *,
     recursive: bool = False,
     strict: bool = False,
     keep_original: bool = False,
     datetime_formats: list[str] | None = None,
-) -> dict:
+) -> dict[Any, Any]:
     """Rename and convert date/datetime fields to a consistent naming convention.
 
     For each rule, finds keys matching the rule's matcher (suffix/prefix/equals/regex),
@@ -1661,8 +1663,8 @@ def normalize_date_fields(
 
     compiled = [_compile_date_field_rule(r) for r in rules]
 
-    def _walk(d: Mapping) -> dict:
-        result: dict = {}
+    def _walk(d: Mapping[Any, Any]) -> dict[Any, Any]:
+        result: dict[Any, Any] = {}
         for k, v in d.items():
             if recursive and isinstance(v, Mapping):
                 v = _walk(v)
@@ -1675,7 +1677,7 @@ def normalize_date_fields(
     return _walk(data)
 
 
-def _compile_date_field_rule(rule: Mapping) -> Callable[[Any], tuple[str, str] | None]:
+def _compile_date_field_rule(rule: Mapping[str, Any]) -> Callable[[Any], tuple[str, str] | None]:
     """Parse a rule dict into a callable that returns `(new_key, convert_type)` or None."""
     matchers_present = [m for m in ("suffix", "prefix", "equals", "regex") if m in rule]
     if len(matchers_present) != 1:
