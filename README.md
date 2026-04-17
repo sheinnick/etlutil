@@ -15,6 +15,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
   - Recursive flattening of nested dicts via `flatten_dict` (BQ-safe `parent__child` keys)
+  - Date/datetime field rename + convert via `normalize_date_fields` (enforce `date_`/`datetime_` convention)
   - Schema-driven value conversion with `convert_dict_types` (int/float/bool/date/datetime/timestamp family)
   - Sensitive field scrubbing with `clean_dict` (replace/hash/fingerprint/delete modes)
 - **Data Structure Visualization**:
@@ -321,6 +322,86 @@ Key points:
 - **Key collisions resolve last-write-wins**; with `keep_original=True` the unprefixed key is written AFTER its flattened paths
 - **Immutable**: original dict is not mutated
 - **BQ-ready**: default `__` separator plays nicely with BigQuery column naming
+
+### Normalize Date Fields (normalize_date_fields)
+
+Enforce a consistent naming convention for date/datetime fields by matching keys
+(by suffix/prefix/equals/regex), renaming them to `datetime_<base>` or `date_<base>`,
+and converting values in one pass.
+
+```python
+from etlutil import normalize_date_fields
+
+# Unix timestamps → ISO datetime strings, renamed to datetime_<base>
+data = {
+    "id": "123",
+    "created_at": 1735056631,
+    "updated_at": 1735056700,
+    "waiting_since": 1735056631,
+    "snoozed_until": None,
+}
+
+normalize_date_fields(
+    data,
+    [
+        {
+            "suffix": ["_at", "_since", "_until"],
+            "convert": "timestamp_to_iso",
+            "target": "datetime",
+        }
+    ],
+)
+# {
+#   "id": "123",
+#   "datetime_created":  "2024-12-24T20:10:31",
+#   "datetime_updated":  "2024-12-24T20:11:40",
+#   "datetime_waiting":  "2024-12-24T20:10:31",
+#   "datetime_snoozed":  None,
+# }
+
+# Same input, but want only the date portion
+normalize_date_fields(
+    data,
+    [{"suffix": "_at", "convert": "timestamp_to_iso_date", "target": "date"}],
+)
+# {..., "date_created": "2024-12-24", ...}
+
+# Prefix matcher
+normalize_date_fields(
+    {"ts_created": 1735056631, "name": "x"},
+    [{"prefix": "ts_", "convert": "timestamp_to_iso", "target": "datetime"}],
+)
+# {"datetime_created": "2024-12-24T20:10:31", "name": "x"}
+
+# Regex matcher, recursive descent into nested dicts
+normalize_date_fields(
+    {"meta": {"created_at": 1735056631}},
+    [{"regex": r"_at$", "convert": "timestamp_to_iso", "target": "datetime"}],
+    recursive=True,
+)
+# {"meta": {"datetime_created": "2024-12-24T20:10:31"}}
+
+# Keep original field alongside the renamed one
+normalize_date_fields(
+    {"created_at": 1735056631},
+    [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    keep_original=True,
+)
+# {"created_at": 1735056631, "datetime_created": "2024-12-24T20:10:31"}
+```
+
+Key points:
+
+- **Matchers**: exactly one per rule — `suffix`, `prefix`, `equals` (all accept a string or a list), or `regex` (single pattern string)
+- **`convert`**: any `ConvertType` value (`timestamp`, `timestamp_to_iso`, `timestamp_to_iso_date`, `date`, `datetime`, etc.)
+- **`target`**: new key prefix (e.g., `"datetime"` → result key `"datetime_<base>"`; underscore added automatically)
+- **Base derivation**: the matched substring is stripped from the key. If the result is empty (e.g., `equals` or regex matching the entire string), the full original key is used as base instead
+- **`strip_match=False`**: opt out of stripping and keep the full original key as base (`created_at` → `datetime_created_at`)
+- **Rule order matters**: first matching rule wins; later rules skipped
+- **Non-string keys** are never matched; they pass through untouched
+- **`recursive=True`** descends into nested dicts (lists are NOT descended into)
+- **`keep_original=True`** keeps the original field alongside the renamed one; default `False` is a pure rename
+- **Immutable**: original dict is not mutated
 
 ### Date Processing (Quick Examples)
 

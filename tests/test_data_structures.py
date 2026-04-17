@@ -12,6 +12,7 @@ from etlutil import (
     clean_dict,
     flatten_dict,
     move_unknown_keys_to_extra,
+    normalize_date_fields,
     prune_data,
     walk,
 )
@@ -1281,6 +1282,349 @@ def test_flatten_dict_intercom_like():
         "tags__type": "tag.list",
         "tags__tags": [{"name": "urgent"}],
     }
+
+
+# ============================================================================
+# Tests for normalize_date_fields function
+# ============================================================================
+
+
+def test_normalize_date_fields_suffix_timestamp_to_datetime():
+    data = {"created_at": 1735056631, "updated_at": 1735056631, "id": "x"}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {
+        "datetime_created": "2024-12-24T20:10:31",
+        "datetime_updated": "2024-12-24T20:10:31",
+        "id": "x",
+    }
+
+
+def test_normalize_date_fields_same_source_different_target():
+    """Same input: pick datetime vs date via the convert+target pair."""
+    data = {"created_at": 1735056631}
+
+    as_datetime = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert as_datetime == {"datetime_created": "2024-12-24T20:10:31"}
+
+    as_date = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso_date", "target": "date"}],
+    )
+    assert as_date == {"date_created": "2024-12-24"}
+
+
+def test_normalize_date_fields_suffix_list():
+    """Multiple suffixes in a single rule."""
+    data = {
+        "created_at": 1735056631,
+        "waiting_since": 1735056631,
+        "snoozed_until": 1735056631,
+        "id": "x",
+    }
+    result = normalize_date_fields(
+        data,
+        [
+            {
+                "suffix": ["_at", "_since", "_until"],
+                "convert": "timestamp_to_iso",
+                "target": "datetime",
+            }
+        ],
+    )
+    assert result == {
+        "datetime_created": "2024-12-24T20:10:31",
+        "datetime_waiting": "2024-12-24T20:10:31",
+        "datetime_snoozed": "2024-12-24T20:10:31",
+        "id": "x",
+    }
+
+
+def test_normalize_date_fields_prefix():
+    data = {"ts_created": 1735056631, "ts_deleted": 1735056631, "name": "x"}
+    result = normalize_date_fields(
+        data,
+        [{"prefix": "ts_", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {
+        "datetime_created": "2024-12-24T20:10:31",
+        "datetime_deleted": "2024-12-24T20:10:31",
+        "name": "x",
+    }
+
+
+def test_normalize_date_fields_equals_uses_full_key_as_base():
+    """Equals: base after strip is empty, so the whole original key becomes the base."""
+    data = {"birthday": "2024-12-25", "id": "x"}
+    result = normalize_date_fields(
+        data,
+        [{"equals": "birthday", "convert": "date", "target": "date"}],
+    )
+    from datetime import date
+
+    assert result == {"date_birthday": date(2024, 12, 25), "id": "x"}
+
+
+def test_normalize_date_fields_regex():
+    data = {"any_ts": 1735056631, "created_at": 1735056631, "keep_me": "hi"}
+    result = normalize_date_fields(
+        data,
+        [{"regex": r"_ts$|_at$", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {
+        "datetime_any": "2024-12-24T20:10:31",
+        "datetime_created": "2024-12-24T20:10:31",
+        "keep_me": "hi",
+    }
+
+
+def test_normalize_date_fields_first_rule_wins():
+    """Multiple rules — first one that matches is applied; others skipped."""
+    data = {"created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [
+            {"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"},
+            {"suffix": "_at", "convert": "timestamp_to_iso_date", "target": "date"},
+        ],
+    )
+    # first rule wins → datetime, not date
+    assert result == {"datetime_created": "2024-12-24T20:10:31"}
+
+
+def test_normalize_date_fields_no_match_passthrough():
+    """Keys that don't match any rule pass through unchanged."""
+    data = {"id": 1, "name": "x", "created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [{"prefix": "NOPE_", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {"id": 1, "name": "x", "created_at": 1735056631}
+
+
+def test_normalize_date_fields_strip_match_false():
+    """strip_match=False keeps the full original key as base."""
+    data = {"created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [
+            {
+                "suffix": "_at",
+                "convert": "timestamp_to_iso",
+                "target": "datetime",
+                "strip_match": False,
+            }
+        ],
+    )
+    assert result == {"datetime_created_at": "2024-12-24T20:10:31"}
+
+
+def test_normalize_date_fields_recursive():
+    data = {
+        "created_at": 1735056631,
+        "nested": {"updated_at": 1735056631, "name": "x"},
+    }
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+        recursive=True,
+    )
+    assert result == {
+        "datetime_created": "2024-12-24T20:10:31",
+        "nested": {"datetime_updated": "2024-12-24T20:10:31", "name": "x"},
+    }
+
+
+def test_normalize_date_fields_non_recursive_default():
+    """Without recursive=True, nested dicts are not processed."""
+    data = {"created_at": 1735056631, "nested": {"updated_at": 1735056631}}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {
+        "datetime_created": "2024-12-24T20:10:31",
+        "nested": {"updated_at": 1735056631},
+    }
+
+
+def test_normalize_date_fields_immutability():
+    data = {"created_at": 1735056631}
+    original = deepcopy(data)
+    _ = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert data == original
+
+
+def test_normalize_date_fields_invalid_rule_no_matcher():
+    with pytest.raises(ValueError):
+        normalize_date_fields({}, [{"convert": "timestamp_to_iso", "target": "datetime"}])
+
+
+def test_normalize_date_fields_invalid_rule_two_matchers():
+    with pytest.raises(ValueError):
+        normalize_date_fields(
+            {},
+            [
+                {
+                    "suffix": "_at",
+                    "prefix": "ts_",
+                    "convert": "timestamp_to_iso",
+                    "target": "datetime",
+                }
+            ],
+        )
+
+
+def test_normalize_date_fields_invalid_rule_missing_convert():
+    with pytest.raises(ValueError):
+        normalize_date_fields({}, [{"suffix": "_at", "target": "datetime"}])
+
+
+def test_normalize_date_fields_invalid_rule_missing_target():
+    with pytest.raises(ValueError):
+        normalize_date_fields({}, [{"suffix": "_at", "convert": "timestamp_to_iso"}])
+
+
+def test_normalize_date_fields_non_dict_input_raises():
+    with pytest.raises(TypeError):
+        normalize_date_fields([1, 2, 3], [])
+
+
+def test_normalize_date_fields_keep_original_default_drops():
+    """Default keep_original=False drops the original key (pure rename)."""
+    data = {"created_at": 1735056631, "id": "x"}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert "created_at" not in result
+    assert result == {"datetime_created": "2024-12-24T20:10:31", "id": "x"}
+
+
+def test_normalize_date_fields_keep_original_true_keeps_both():
+    data = {"created_at": 1735056631, "id": "x"}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+        keep_original=True,
+    )
+    assert result == {
+        "created_at": 1735056631,
+        "datetime_created": "2024-12-24T20:10:31",
+        "id": "x",
+    }
+
+
+def test_normalize_date_fields_keep_original_unmatched_no_duplicate():
+    """Unmatched keys are never duplicated regardless of keep_original."""
+    data = {"id": "x", "name": "y"}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+        keep_original=True,
+    )
+    assert result == {"id": "x", "name": "y"}
+
+
+def test_normalize_date_fields_keep_original_recursive():
+    """keep_original works at every level of recursive descent."""
+    data = {"created_at": 1735056631, "nested": {"updated_at": 1735056631}}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+        recursive=True,
+        keep_original=True,
+    )
+    assert result == {
+        "created_at": 1735056631,
+        "datetime_created": "2024-12-24T20:10:31",
+        "nested": {
+            "updated_at": 1735056631,
+            "datetime_updated": "2024-12-24T20:10:31",
+        },
+    }
+
+
+def test_normalize_date_fields_convert_accepts_enum():
+    """`convert` accepts a ConvertType enum (not just its string value)."""
+    data = {"created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [{"suffix": "_at", "convert": ConvertType.TIMESTAMP_TO_ISO, "target": "datetime"}],
+    )
+    assert result == {"datetime_created": "2024-12-24T20:10:31"}
+
+
+def test_normalize_date_fields_regex_non_string_pattern_raises():
+    with pytest.raises(TypeError):
+        normalize_date_fields(
+            {},
+            [{"regex": 42, "convert": "timestamp_to_iso", "target": "datetime"}],
+        )
+
+
+def test_normalize_date_fields_regex_whole_string_match_falls_back_to_full_key():
+    """Regex that strips the whole key falls back to original as base."""
+    data = {"created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [{"regex": r"^created_at$", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert result == {"datetime_created_at": "2024-12-24T20:10:31"}
+
+
+def test_normalize_date_fields_non_string_keys_skipped():
+    """Rules only match string keys; numeric/tuple keys pass through."""
+    data = {1: "not-a-date", ("a", "b"): 42, "created_at": 1735056631}
+    result = normalize_date_fields(
+        data,
+        [
+            {"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"},
+            {"regex": r"_at$", "convert": "timestamp_to_iso", "target": "datetime"},
+        ],
+    )
+    assert result[1] == "not-a-date"
+    assert result[("a", "b")] == 42
+    assert result["datetime_created"] == "2024-12-24T20:10:31"
+
+
+def test_normalize_date_fields_intercom_like():
+    """Realistic pattern: Intercom conversation with _at, _since, _until timestamps."""
+    record = {
+        "id": "123",
+        "created_at": 1774812740,
+        "updated_at": 1774915632,
+        "waiting_since": 1774812740,
+        "snoozed_until": None,
+        "state": "closed",
+    }
+    result = normalize_date_fields(
+        record,
+        [
+            {
+                "suffix": ["_at", "_since", "_until"],
+                "convert": "timestamp_to_iso",
+                "target": "datetime",
+            }
+        ],
+    )
+    assert result["id"] == "123"
+    assert result["state"] == "closed"
+    assert result["datetime_snoozed"] is None  # None preserved
+    assert result["datetime_created"].startswith("2026-")
+    assert result["datetime_updated"].startswith("2026-")
+    assert result["datetime_waiting"].startswith("2026-")
+    # originals gone
+    assert "created_at" not in result
+    assert "waiting_since" not in result
 
 
 def test_clean_dict_skip_rules_allowlist():

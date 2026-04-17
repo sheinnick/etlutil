@@ -1541,3 +1541,187 @@ def flatten_dict(
         return result
 
     return _flatten(data, max_depth)
+
+
+class DateFieldRule(TypedDict, total=False):
+    """Rule describing how to detect and rename a date/datetime field.
+
+    Exactly one matcher key must be present: `suffix`, `prefix`, `equals`, or `regex`.
+    Suffix/prefix/equals accept a string or list of strings. Regex takes a single
+    pattern string. `convert` and `target` are required.
+    """
+
+    suffix: str | list[str]
+    prefix: str | list[str]
+    equals: str | list[str]
+    regex: str
+    convert: str
+    target: str
+    strip_match: bool
+
+
+def normalize_date_fields(
+    data: dict,
+    rules: Iterable[DateFieldRule],
+    *,
+    recursive: bool = False,
+    strict: bool = False,
+    keep_original: bool = False,
+    datetime_formats: list[str] | None = None,
+) -> dict:
+    """Rename and convert date/datetime fields to a consistent naming convention.
+
+    For each rule, finds keys matching the rule's matcher (suffix/prefix/equals/regex),
+    renames them to `"{target}_{base}"` (where `base` is the original key with the
+    matched portion stripped), and converts their values via the configured
+    `convert` type (same set as `convert_dict_types`).
+
+    First matching rule wins. Keys not matched by any rule pass through unchanged.
+
+    Args:
+        data: Input dict. Not mutated.
+        rules: Iterable of rule dicts (see `DateFieldRule`).
+        recursive: Descend into nested dicts (list items are NOT descended into).
+        strict: Raise on conversion failures instead of preserving original values.
+        keep_original: When True, for every matched key KEEP the original name
+            and value alongside the renamed+converted one. Default False drops
+            the original (rename semantics).
+        datetime_formats: Override list of `strptime` formats for datetime parsing.
+
+    Returns:
+        New dict with renamed + converted fields.
+
+    Raises:
+        TypeError: If `data` is not a Mapping.
+        ValueError: If a rule is malformed (missing matcher, `convert`, or `target`).
+
+    Notes:
+        - `strip_match` defaults to True. If stripping leaves an empty base, the
+          full original key is used instead (makes `equals` rules produce
+          `"{target}_{original_key}"`).
+        - Key collisions from the rename step resolve last-write-wins; when
+          `keep_original=True` the new key is written AFTER the original, so the
+          renamed entry wins on collision.
+        - Non-string keys are never matched (rules are name-based).
+
+    Examples:
+        >>> data = {"created_at": 1735056631, "id": "x"}
+        >>> normalize_date_fields(data, [
+        ...     {"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"},
+        ... ])
+        {'datetime_created': '2024-12-24T20:10:31', 'id': 'x'}
+
+        >>> # same input, extract only date
+        >>> normalize_date_fields(data, [
+        ...     {"suffix": "_at", "convert": "timestamp_to_iso_date", "target": "date"},
+        ... ])
+        {'date_created': '2024-12-24', 'id': 'x'}
+
+        >>> # keep original alongside renamed
+        >>> normalize_date_fields(data, [
+        ...     {"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"},
+        ... ], keep_original=True)
+        {'created_at': 1735056631, 'datetime_created': '2024-12-24T20:10:31', 'id': 'x'}
+    """
+    if not isinstance(data, Mapping):
+        raise TypeError("data must be a dict")
+    if datetime_formats is None:
+        datetime_formats = ["%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d"]
+
+    compiled = [_compile_date_field_rule(r) for r in rules]
+
+    def _walk(d: Mapping) -> dict:
+        result: dict = {}
+        for k, v in d.items():
+            if recursive and isinstance(v, Mapping):
+                v = _walk(v)
+            new_k, new_v = _apply_date_rules(k, v, compiled, strict, datetime_formats)
+            if keep_original and new_k != k:
+                result[k] = v
+            result[new_k] = new_v
+        return result
+
+    return _walk(data)
+
+
+def _compile_date_field_rule(rule: Mapping) -> Callable[[Any], tuple[str, str] | None]:
+    """Parse a rule dict into a callable that returns `(new_key, convert_type)` or None."""
+    matchers_present = [m for m in ("suffix", "prefix", "equals", "regex") if m in rule]
+    if len(matchers_present) != 1:
+        raise ValueError(f"rule must have exactly one of suffix/prefix/equals/regex, got {matchers_present}")
+    if "convert" not in rule:
+        raise ValueError("rule requires 'convert'")
+    if "target" not in rule:
+        raise ValueError("rule requires 'target'")
+
+    match_type = matchers_present[0]
+    match_value = rule[match_type]
+    convert_type = rule["convert"]
+    if isinstance(convert_type, ConvertType):
+        convert_type = convert_type.value
+    target_prefix = rule["target"]
+    strip_match = rule.get("strip_match", True)
+
+    if match_type == "regex":
+        if not isinstance(match_value, str):
+            raise TypeError("regex rule requires string pattern")
+        compiled_re = re.compile(match_value)
+
+        def transform(key: Any) -> tuple[str, str] | None:
+            if not isinstance(key, str):
+                return None
+            m = compiled_re.search(key)
+            if not m:
+                return None
+            base = key[: m.start()] + key[m.end() :] if strip_match else key
+            if not base:
+                base = key
+            return f"{target_prefix}_{base}", convert_type
+    else:
+        patterns = [match_value] if isinstance(match_value, str) else list(match_value)
+
+        def transform(key: Any) -> tuple[str, str] | None:
+            if not isinstance(key, str):
+                return None
+            for p in patterns:
+                matched = False
+                if match_type == "suffix":
+                    matched = key.endswith(p)
+                elif match_type == "prefix":
+                    matched = key.startswith(p)
+                elif match_type == "equals":
+                    matched = key == p
+                if not matched:
+                    continue
+                if not strip_match:
+                    base = key
+                elif match_type == "suffix":
+                    base = key[: -len(p)] if p else key
+                elif match_type == "prefix":
+                    base = key[len(p) :]
+                else:  # equals
+                    base = ""
+                if not base:
+                    base = key
+                return f"{target_prefix}_{base}", convert_type
+            return None
+
+    return transform
+
+
+def _apply_date_rules(
+    key: Any,
+    value: Any,
+    compiled_rules: list[Callable[[Any], tuple[str, str] | None]],
+    strict: bool,
+    datetime_formats: list[str],
+) -> tuple[Any, Any]:
+    """Apply compiled rules in order; return `(new_key, new_value)` after first match."""
+    for rule_fn in compiled_rules:
+        outcome = rule_fn(key)
+        if outcome is None:
+            continue
+        new_key, convert_type = outcome
+        new_value = _convert_value(value, convert_type, strict, False, datetime_formats)
+        return new_key, new_value
+    return key, value

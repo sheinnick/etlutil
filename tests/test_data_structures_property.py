@@ -12,6 +12,7 @@ from etlutil import (
     clean_dict,
     flatten_dict,
     move_unknown_keys_to_extra,
+    normalize_date_fields,
     prune_data,
     walk,
 )
@@ -907,3 +908,91 @@ def test_flatten_dict_skip_wins_over_flat(payload, skip):
     for k in skip:
         if k in payload:
             assert result[k] == payload[k]
+
+
+# ============================================================================
+# Property-based tests for normalize_date_fields function
+# ============================================================================
+
+
+# Strategy producing dicts where some keys end with "_at" and hold integer timestamps
+_TIMESTAMP = st.integers(min_value=0, max_value=2_000_000_000)
+_NAME_BASE = st.text(alphabet="abcdefghijklmnopqrstuvwxyz", min_size=1, max_size=6)
+
+
+def _make_timestamp_dict(draw: st.DrawFn) -> dict:
+    """Draw a dict with a mix of `_at` timestamp keys and unrelated keys."""
+    items: dict = {}
+    # date-like keys
+    for base in draw(st.lists(_NAME_BASE, min_size=0, max_size=5, unique=True)):
+        items[f"{base}_at"] = draw(_TIMESTAMP)
+    # unrelated keys
+    for name in draw(st.lists(_NAME_BASE, min_size=0, max_size=5, unique=True)):
+        items[name] = draw(st.one_of(st.integers(), st.text(), st.none()))
+    return items
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_no_mutation(payload):
+    """Input must not be mutated."""
+    before = deepcopy(payload)
+    _ = normalize_date_fields(
+        payload,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    assert payload == before
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_deterministic(payload):
+    """Same inputs produce identical outputs."""
+    rules = [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}]
+    r1 = normalize_date_fields(payload, rules)
+    r2 = normalize_date_fields(payload, rules)
+    assert r1 == r2
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_renames_matched(payload):
+    """Every `_at` key disappears; corresponding `datetime_<base>` appears."""
+    result = normalize_date_fields(
+        payload,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    for k in payload:
+        if k.endswith("_at"):
+            base = k[:-3] or k  # fallback to full name if base is empty
+            assert k not in result
+            assert f"datetime_{base}" in result
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_unmatched_untouched(payload):
+    """Keys that don't match any rule are preserved with same value."""
+    result = normalize_date_fields(
+        payload,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+    )
+    for k, v in payload.items():
+        if not k.endswith("_at"):
+            assert result.get(k) == v
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_empty_rules_is_passthrough(payload):
+    """With no rules, output equals input exactly."""
+    result = normalize_date_fields(payload, [])
+    assert result == payload
+
+
+@given(payload=st.builds(lambda d: d, st.composite(lambda draw: _make_timestamp_dict(draw))()))
+def test_normalize_date_fields_keep_original_preserves_all_input_keys(payload):
+    """With keep_original=True, every original key still appears in output with its value."""
+    result = normalize_date_fields(
+        payload,
+        [{"suffix": "_at", "convert": "timestamp_to_iso", "target": "datetime"}],
+        keep_original=True,
+    )
+    for k, v in payload.items():
+        assert k in result
+        assert result[k] == v

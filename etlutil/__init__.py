@@ -10,6 +10,7 @@ from .data_structures import (
     convert_dict_types,
     flatten_dict,
     move_unknown_keys_to_extra,
+    normalize_date_fields,
     prune_data,
     walk,
 )
@@ -42,6 +43,7 @@ __all__ = [
     "convert_dict_types",
     "flatten_dict",
     "move_unknown_keys_to_extra",
+    "normalize_date_fields",
     "prune_data",
     "walk",
 ]
