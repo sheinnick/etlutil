@@ -657,6 +657,8 @@ def move_unknown_keys_to_extra(
     *,
     extra_key: str = "extra_collected",
     always_add_extra: bool = False,
+    preserve_order: bool = False,
+    fill_missing: bool = False,
 ) -> tuple[dict, list[str]]:
     """Move unknown keys from dict to extra collection, keeping only whitelisted keys.
 
@@ -666,6 +668,12 @@ def move_unknown_keys_to_extra(
         extra_key: Key name for collecting extra items. Defaults to "extra_collected".
         always_add_extra: If True, always add extra_key even when no keys were moved.
             Defaults to False (only add extra_key when there are moved keys).
+        preserve_order: If True, output keys follow the order of `allowed_keys`
+            (deduped, first-seen wins), with `extra_key` appended last. Default
+            False keeps the original lexicographic sort for backward compatibility.
+        fill_missing: If True, every key in `allowed_keys` is guaranteed to appear
+            in the output — absent ones are filled with None (stable schema).
+            Default False keeps only keys that were present in the input.
 
     Returns:
         Tuple of (normalized_dict, moved_keys_list).
@@ -683,17 +691,28 @@ def move_unknown_keys_to_extra(
         - If extra_key exists in input, rename to f'{extra_key}_original'
         - Cascade with _original2, _original3, etc. until free name found
 
-    Output sorting:
-        - All keys sorted lexicographically by final string names
-        - Both top-level and extra_collected contents sorted
+    Output ordering:
+        - Default (preserve_order=False): all keys sorted lexicographically.
+        - preserve_order=True: whitelist order first, renamed collision keys next,
+          `extra_key` last. `extra_key` contents are always sorted lexicographically.
 
-        Examples:
+    Examples:
         >>> data = {"id": 123, "name": "alex", "age": 30, "city": "berlin"}
         >>> result, moved = move_unknown_keys_to_extra(data, ["id", "name"])
         >>> result
         {'extra_collected': {'age': 30, 'city': 'berlin'}, 'id': 123, 'name': 'alex'}
         >>> moved
         ['age', 'city']
+
+        >>> # Preserve whitelist order
+        >>> result, _ = move_unknown_keys_to_extra(data, ["name", "id"], preserve_order=True)
+        >>> list(result.keys())
+        ['name', 'id', 'extra_collected']
+
+        >>> # Fill missing whitelist keys with None
+        >>> result, _ = move_unknown_keys_to_extra({"id": 1}, ["id", "name"], fill_missing=True)
+        >>> result
+        {'id': 1, 'name': None}
 
         >>> # Always add extra_collected even when no keys moved
         >>> data = {"id": 123, "name": "alex"}
@@ -714,9 +733,17 @@ def move_unknown_keys_to_extra(
     if not isinstance(data, dict):
         raise TypeError("data must be a dict")
 
-    # Normalize allowed_keys to set of strings for consistent comparison
-    # Handle None input gracefully by treating as empty whitelist
-    allowed_str_keys = {str(k) for k in allowed_keys} if allowed_keys is not None else set()
+    # Normalize allowed_keys:
+    # - allowed_ordered preserves first-seen order for preserve_order/fill_missing
+    # - allowed_str_keys is a set for fast membership checks
+    allowed_ordered: list[str] = []
+    allowed_str_keys: set[str] = set()
+    if allowed_keys is not None:
+        for k in allowed_keys:
+            sk = str(k)
+            if sk not in allowed_str_keys:
+                allowed_str_keys.add(sk)
+                allowed_ordered.append(sk)
 
     # Step 1: Resolve key collisions after str() conversion
     # This handles cases where different key types stringify to same name (e.g., 1 and "1")
@@ -764,14 +791,30 @@ def move_unknown_keys_to_extra(
             extra_items[final_key] = original_value
             moved_keys.append(final_key)
 
+    # Step 3.5: fill missing whitelist keys with None for a stable schema
+    if fill_missing:
+        for sk in allowed_ordered:
+            if sk not in kept_items:
+                kept_items[sk] = None
+
     # Step 4: Add extra items under extra_key if needed
     # Create extra collection if there are items OR if always_add_extra is True
     if (extra_items or always_add_extra) and extra_key is not None:
         kept_items[extra_key] = extra_items
 
-    # Step 5: Sort all keys lexicographically for consistent output
-    # This ensures deterministic results regardless of input dict order
-    result = {k: kept_items[k] for k in sorted(kept_items.keys())}
+    # Step 5: Order output keys
+    if preserve_order:
+        # Whitelist order first; renamed collision keys next; extra_key last.
+        final_keys: list[str] = [k for k in allowed_ordered if k in kept_items]
+        for k in kept_items:
+            if k != extra_key and k not in final_keys:
+                final_keys.append(k)
+        if extra_key in kept_items:
+            final_keys.append(extra_key)
+        result = {k: kept_items[k] for k in final_keys}
+    else:
+        # Default lexicographic sort — stable, backward-compatible output.
+        result = {k: kept_items[k] for k in sorted(kept_items.keys())}
 
     # Sort extra_collected contents too for consistency
     if extra_key in result and isinstance(result[extra_key], dict):

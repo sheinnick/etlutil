@@ -682,6 +682,84 @@ def test_move_unknown_keys_sorting():
     assert moved == ["a", "b", "m"]
 
 
+# move_unknown_keys_to_extra: preserve_order + fill_missing
+def test_move_unknown_keys_preserve_order_follows_whitelist():
+    data = {"z": 1, "a": 2, "m": 3, "b": 4}
+    result, _ = move_unknown_keys_to_extra(data, ["m", "a", "z"], preserve_order=True)
+    assert list(result.keys()) == ["m", "a", "z", "extra_collected"]
+
+
+def test_move_unknown_keys_preserve_order_no_extra_when_not_needed():
+    data = {"a": 1, "b": 2}
+    result, _ = move_unknown_keys_to_extra(data, ["b", "a"], preserve_order=True)
+    assert list(result.keys()) == ["b", "a"]
+
+
+def test_move_unknown_keys_preserve_order_dedup_first_seen():
+    data = {"a": 1, "b": 2}
+    # duplicated whitelist entries — first-seen wins
+    result, _ = move_unknown_keys_to_extra(data, ["b", "a", "b", "a"], preserve_order=True)
+    assert list(result.keys()) == ["b", "a"]
+
+
+def test_move_unknown_keys_preserve_order_with_collision_rename():
+    """Renamed collision keys (extra_collected already in data) sit between whitelist and extra_key."""
+    data = {"id": 1, "extra_collected": "oops", "age": 30}
+    result, _ = move_unknown_keys_to_extra(data, ["id"], preserve_order=True)
+    assert list(result.keys()) == ["id", "extra_collected_original", "extra_collected"]
+    assert result["extra_collected_original"] == "oops"
+    assert result["extra_collected"] == {"age": 30}
+
+
+def test_move_unknown_keys_fill_missing_basic():
+    data = {"id": 1}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name", "age"], fill_missing=True)
+    assert result == {"id": 1, "name": None, "age": None}
+    assert moved == []
+
+
+def test_move_unknown_keys_fill_missing_does_not_overwrite_existing():
+    data = {"id": 1, "name": "alex"}
+    result, _ = move_unknown_keys_to_extra(data, ["id", "name", "age"], fill_missing=True)
+    assert result == {"age": None, "id": 1, "name": "alex"}
+
+
+def test_move_unknown_keys_fill_missing_with_extras():
+    data = {"id": 1, "stray": "value"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name"], fill_missing=True)
+    assert result == {"extra_collected": {"stray": "value"}, "id": 1, "name": None}
+    assert moved == ["stray"]
+
+
+def test_move_unknown_keys_preserve_order_and_fill_missing_combined():
+    """The feature combo the intercom pipeline actually needs."""
+    data = {"stray": "extra", "name": "alex"}
+    result, moved = move_unknown_keys_to_extra(data, ["id", "name", "age"], preserve_order=True, fill_missing=True)
+    assert list(result.keys()) == ["id", "name", "age", "extra_collected"]
+    assert result == {
+        "id": None,
+        "name": "alex",
+        "age": None,
+        "extra_collected": {"stray": "extra"},
+    }
+    assert moved == ["stray"]
+
+
+def test_move_unknown_keys_preserve_order_ignores_unknown_whitelist_entries_for_position():
+    """Whitelist keys missing from input don't force themselves in unless fill_missing=True."""
+    data = {"a": 1, "c": 3}
+    # b is missing, fill_missing=False → b skipped from output
+    result, _ = move_unknown_keys_to_extra(data, ["a", "b", "c"], preserve_order=True)
+    assert list(result.keys()) == ["a", "c"]
+
+
+def test_move_unknown_keys_backward_compat_defaults_sorted():
+    """Defaults (no new params) produce the same alphabetical output as before."""
+    data = {"z": 1, "a": 2, "m": 3}
+    result, _ = move_unknown_keys_to_extra(data, ["z", "a", "m"])
+    assert list(result.keys()) == ["a", "m", "z"]
+
+
 def test_move_unknown_keys_immutability():
     """Original data should not be modified."""
     data = {"id": 123, "name": "alex", "age": 30}

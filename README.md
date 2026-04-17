@@ -240,9 +240,30 @@ Key points:
 - **Key collision resolution**: String keys get priority, others get type suffixes (`1__int`, `1__decimal`)
 - **Extra key collision handling**: If `extra_key` exists in data, it gets renamed (`extra_collected_original`)
 - **Flexible output**: Set `extra_key=None` to discard unknown keys instead of collecting
-- **Lexicographic sorting**: All keys sorted consistently for deterministic output
+- **Lexicographic sorting by default**: All keys sorted consistently for deterministic output
+- **`preserve_order=True`**: output follows the `allowed_keys` order (deduped, first-seen), `extra_key` last — useful when building a stable column order for BQ
+- **`fill_missing=True`**: whitelist keys absent from input are added with `None`, giving a stable schema regardless of which fields are present in a given record
 - **Immutable operation**: Original data unchanged, returns new dictionary
 - **Type conversion**: All keys converted to strings for consistent processing
+
+```python
+# Preserve whitelist order + fill missing with None (stable schema)
+data = {"stray": "extra", "name": "alex"}
+result, moved = move_unknown_keys_to_extra(
+    data,
+    ["id", "name", "age"],
+    preserve_order=True,
+    fill_missing=True,
+)
+# result:
+# {
+#   "id": None,
+#   "name": "alex",
+#   "age": None,
+#   "extra_collected": {"stray": "extra"},
+# }
+# moved: ["stray"]
+```
 
 ### Date Processing (Quick Examples)
 
