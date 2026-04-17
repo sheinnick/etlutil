@@ -8,7 +8,13 @@ from datetime import date, datetime
 
 import pytest
 
-from etlutil import clean_dict, move_unknown_keys_to_extra, prune_data, walk
+from etlutil import (
+    clean_dict,
+    flatten_dict,
+    move_unknown_keys_to_extra,
+    prune_data,
+    walk,
+)
 from etlutil.data_structures import ConvertType, convert_dict_types
 
 
@@ -1095,6 +1101,186 @@ def test_clean_dict_farm_fingerprint_mode():
     )
 
     assert result["session"] == farmhash.Fingerprint64(b"abc123")
+
+
+# ============================================================================
+# Tests for flatten_dict function
+# ============================================================================
+
+
+def test_flatten_dict_basic():
+    """Single-level nested dict flattens with default separator."""
+    data = {"a": {"b": 1, "c": 2}, "d": 3}
+    result = flatten_dict(data)
+    assert result == {"a__b": 1, "a__c": 2, "d": 3}
+
+
+def test_flatten_dict_multi_level():
+    """Multiple levels of nesting flatten fully by default."""
+    data = {"a": {"b": {"c": {"d": 1}}}}
+    result = flatten_dict(data)
+    assert result == {"a__b__c__d": 1}
+
+
+def test_flatten_dict_custom_separator():
+    data = {"a": {"b": {"c": 1}}}
+    assert flatten_dict(data, sep=".") == {"a.b.c": 1}
+    assert flatten_dict(data, sep="/") == {"a/b/c": 1}
+
+
+def test_flatten_dict_lists_pass_through():
+    """Lists/tuples/sets are not descended into; they pass through unchanged."""
+    data = {"a": [1, {"b": 2}], "t": (3, 4), "s": {5, 6}}
+    result = flatten_dict(data)
+    assert result == {"a": [1, {"b": 2}], "t": (3, 4), "s": {5, 6}}
+
+
+def test_flatten_dict_empty_nested_preserved():
+    """Empty nested dicts are kept as {} (nothing to flatten)."""
+    data = {"a": {}, "b": {"c": {}}}
+    assert flatten_dict(data) == {"a": {}, "b__c": {}}
+
+
+def test_flatten_dict_keys_to_skip_top_level():
+    """Keys in keys_to_skip keep their nested value intact."""
+    data = {"a": {"b": 1}, "stats": {"x": 1, "y": {"z": 2}}}
+    result = flatten_dict(data, keys_to_skip=["stats"])
+    assert result == {"a__b": 1, "stats": {"x": 1, "y": {"z": 2}}}
+
+
+def test_flatten_dict_keys_to_skip_match_at_any_level():
+    """keys_to_skip matches the key name at any depth."""
+    data = {"a": {"stats": {"x": 1}, "other": {"y": 2}}}
+    result = flatten_dict(data, keys_to_skip=["stats"])
+    assert result == {"a__stats": {"x": 1}, "a__other__y": 2}
+
+
+@pytest.mark.parametrize(
+    "max_depth,expected",
+    [
+        (0, {"a": {"b": {"c": 1}}}),
+        (1, {"a__b": {"c": 1}}),
+        (2, {"a__b__c": 1}),
+        (3, {"a__b__c": 1}),
+        (None, {"a__b__c": 1}),
+    ],
+)
+def test_flatten_dict_max_depth(max_depth, expected):
+    data = {"a": {"b": {"c": 1}}}
+    assert flatten_dict(data, max_depth=max_depth) == expected
+
+
+def test_flatten_dict_negative_max_depth_raises():
+    with pytest.raises(ValueError):
+        flatten_dict({}, max_depth=-1)
+
+
+@pytest.mark.parametrize("bad", [[1, 2, 3], "abc", 42, None, (1, 2)])
+def test_flatten_dict_non_dict_input_raises(bad):
+    with pytest.raises(TypeError):
+        flatten_dict(bad)
+
+
+def test_flatten_dict_key_collision_last_write_wins():
+    """A flattened path overwrites a pre-existing same-named key."""
+    data = {"a__b": 1, "a": {"b": 2}}
+    assert flatten_dict(data) == {"a__b": 2}
+
+
+def test_flatten_dict_empty_input():
+    assert flatten_dict({}) == {}
+
+
+def test_flatten_dict_immutability():
+    data = {"a": {"b": 1}, "nested": {"x": {"y": 2}}}
+    original = deepcopy(data)
+    _ = flatten_dict(data)
+    assert data == original
+
+
+def test_flatten_dict_keys_to_flat_none_is_default_all():
+    """keys_to_flat=None (default) means every key is eligible."""
+    data = {"a": {"b": 1}, "c": {"d": 2}}
+    assert flatten_dict(data) == flatten_dict(data, keys_to_flat=None)
+
+
+def test_flatten_dict_keys_to_flat_empty_is_no_op():
+    """keys_to_flat=[] — no key gets flattened, returns shallow copy."""
+    data = {"a": {"b": 1}, "c": {"d": 2}}
+    assert flatten_dict(data, keys_to_flat=[]) == data
+
+
+def test_flatten_dict_keys_to_flat_whitelist():
+    """Only keys in keys_to_flat are flattened; others pass through."""
+    data = {"a": {"b": 1}, "stats": {"x": 1, "y": 2}}
+    result = flatten_dict(data, keys_to_flat=["a"])
+    assert result == {"a__b": 1, "stats": {"x": 1, "y": 2}}
+
+
+def test_flatten_dict_keys_to_flat_matches_at_any_level():
+    """Whitelist matches by key name at any depth."""
+    data = {"outer": {"a": {"b": 1}, "other": {"c": 2}}}
+    result = flatten_dict(data, keys_to_flat=["outer", "a"])
+    assert result == {"outer__a__b": 1, "outer__other": {"c": 2}}
+
+
+def test_flatten_dict_skip_wins_over_flat():
+    """A key present in both keys_to_skip and keys_to_flat stays nested."""
+    data = {"a": {"b": 1}}
+    result = flatten_dict(data, keys_to_flat=["a"], keys_to_skip=["a"])
+    assert result == {"a": {"b": 1}}
+
+
+def test_flatten_dict_keep_original_top_level():
+    """keep_original=True keeps the flattened key's original value."""
+    data = {"a": {"b": 1}}
+    result = flatten_dict(data, keep_original=True)
+    assert result == {"a__b": 1, "a": {"b": 1}}
+
+
+def test_flatten_dict_keep_original_multi_level():
+    """keep_original keeps originals at every level where flattening happens."""
+    data = {"a": {"b": {"c": 1}}}
+    result = flatten_dict(data, keep_original=True)
+    assert result == {
+        "a__b__c": 1,
+        "a__b": {"c": 1},
+        "a": {"b": {"c": 1}},
+    }
+
+
+def test_flatten_dict_keep_original_default_false():
+    """Default keep_original=False drops originals (current behavior)."""
+    data = {"a": {"b": 1}}
+    assert flatten_dict(data) == {"a__b": 1}
+
+
+def test_flatten_dict_keep_original_with_skip():
+    """Skipped keys are already originals; keep_original doesn't duplicate them."""
+    data = {"a": {"b": 1}, "stats": {"x": 1}}
+    result = flatten_dict(data, keys_to_skip=["stats"], keep_original=True)
+    assert result == {"a__b": 1, "a": {"b": 1}, "stats": {"x": 1}}
+
+
+def test_flatten_dict_intercom_like():
+    """Real-world-shaped record: flatten most, preserve source/statistics."""
+    record = {
+        "id": "123",
+        "source": {"type": "conversation", "author": {"name": "x"}},
+        "statistics": {"first_admin_reply_at": 1774812813, "count_reopens": 1},
+        "custom_attributes": {"Language": "English", "Chat_owner": "Tori"},
+        "tags": {"type": "tag.list", "tags": [{"name": "urgent"}]},
+    }
+    result = flatten_dict(record, keys_to_skip=["source", "statistics"])
+    assert result == {
+        "id": "123",
+        "source": {"type": "conversation", "author": {"name": "x"}},
+        "statistics": {"first_admin_reply_at": 1774812813, "count_reopens": 1},
+        "custom_attributes__Language": "English",
+        "custom_attributes__Chat_owner": "Tori",
+        "tags__type": "tag.list",
+        "tags__tags": [{"name": "urgent"}],
+    }
 
 
 def test_clean_dict_skip_rules_allowlist():

@@ -14,6 +14,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
 - **Data Cleaning**:
   - Recursive pruning for common containers (dict/list/tuple/set/frozenset) via `prune_data`
   - Dictionary normalization with whitelist filtering via `move_unknown_keys_to_extra`
+  - Recursive flattening of nested dicts via `flatten_dict` (BQ-safe `parent__child` keys)
   - Schema-driven value conversion with `convert_dict_types` (int/float/bool/date/datetime/timestamp family)
   - Sensitive field scrubbing with `clean_dict` (replace/hash/fingerprint/delete modes)
 - **Data Structure Visualization**:
@@ -264,6 +265,62 @@ result, moved = move_unknown_keys_to_extra(
 # }
 # moved: ["stray"]
 ```
+
+### Flatten Nested Dicts (flatten_dict)
+
+```python
+from etlutil import flatten_dict
+
+data = {
+    "id": "123",
+    "source": {"type": "conversation", "author": {"name": "x"}},
+    "statistics": {"first_reply_at": 1774812813, "count_reopens": 1},
+    "custom_attributes": {"Language": "English", "Chat_owner": "Tori"},
+    "tags": {"type": "tag.list", "tags": [{"name": "urgent"}]},
+}
+
+# 1) Default: flatten all nested dicts, lists pass through unchanged
+flatten_dict(data)
+# {
+#   "id": "123",
+#   "source__type": "conversation", "source__author__name": "x",
+#   "statistics__first_reply_at": 1774812813, "statistics__count_reopens": 1,
+#   "custom_attributes__Language": "English", "custom_attributes__Chat_owner": "Tori",
+#   "tags__type": "tag.list", "tags__tags": [{"name": "urgent"}],
+# }
+
+# 2) Preserve selected sub-trees via blacklist (e.g., keep as JSON later)
+flatten_dict(data, keys_to_skip=["source", "statistics"])
+# source/statistics stay as nested dicts; everything else flattens
+
+# 3) Whitelist — only flatten listed keys; others stay nested
+flatten_dict(data, keys_to_flat=["custom_attributes"])
+# only custom_attributes.* gets flattened; source/statistics/tags stay nested
+
+# 4) Custom separator
+flatten_dict({"a": {"b": 1}}, sep=".")
+# {"a.b": 1}
+
+# 5) Depth-limited collapse
+flatten_dict({"a": {"b": {"c": 1}}}, max_depth=1)
+# {"a__b": {"c": 1}}
+
+# 6) keep_original — retain the original nested value alongside flat paths
+flatten_dict({"a": {"b": 1}}, keep_original=True)
+# {"a__b": 1, "a": {"b": 1}}
+```
+
+Key points:
+
+- **Dicts flatten, everything else passes through**: lists/tuples/sets and their contents are left intact
+- **`keys_to_flat`** is a whitelist (matched by key name at any level). `None` (default) = every key eligible; `[]` = flatten nothing
+- **`keys_to_skip`** is a blacklist at any level. **Skip wins over flat** when a key is in both
+- **`max_depth` semantics**: `None` = unlimited, `0` = no-op, `1` = one level, etc.
+- **`keep_original=True`** keeps the unprefixed nested value at every level where flattening happens
+- **Empty nested dicts preserved** as `{}`
+- **Key collisions resolve last-write-wins**; with `keep_original=True` the unprefixed key is written AFTER its flattened paths
+- **Immutable**: original dict is not mutated
+- **BQ-ready**: default `__` separator plays nicely with BigQuery column naming
 
 ### Date Processing (Quick Examples)
 

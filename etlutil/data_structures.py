@@ -1438,3 +1438,106 @@ def _should_skip_cleaning(key: str, value: Any, skip_predicates: Mapping[str, li
         if predicate(value):
             return True
     return False
+
+
+def flatten_dict(
+    data: dict,
+    *,
+    sep: str = "__",
+    keys_to_flat: Iterable[Hashable] | None = None,
+    keys_to_skip: Iterable[Hashable] = (),
+    max_depth: int | None = None,
+    keep_original: bool = False,
+) -> dict:
+    """Recursively flatten nested dictionaries by joining keys with `sep`.
+
+    Nested dicts collapse into the parent: a value of `{"a": {"b": 1}}` becomes
+    `{"a__b": 1}`. Lists, tuples, sets, primitives, and None pass through
+    unchanged — their contents are NOT descended into.
+
+    Args:
+        data: Root dictionary to flatten. Must be a Mapping. Not mutated.
+        sep: String joined between parent and child keys. Default "__" is BQ-safe.
+        keys_to_flat: Whitelist of key names (matched at any level) that are
+            eligible for flattening. `None` (default) means every key is eligible.
+            An empty iterable means NO key gets flattened — result is a shallow
+            copy of the input.
+        keys_to_skip: Blacklist of key names (matched at any level) whose values
+            keep their nested structure as-is. Takes precedence over
+            `keys_to_flat` when a key is in both.
+        max_depth: Maximum number of levels to flatten.
+            None — unlimited. 0 — no flattening (returns a shallow copy).
+            1 — only top-level dicts collapse; deeper stay nested. 2 — two
+            levels collapse, and so on.
+        keep_original: When True, for every key whose value gets flattened,
+            ALSO keep the original nested value under the unprefixed key.
+            Applies at every level of recursion — `{"a": {"b": {"c": 1}}}`
+            with `keep_original=True` yields both flat paths
+            (`a__b__c: 1`, `a__b: {c:1}`) and originals (`a: {b:{c:1}}`).
+
+    Returns:
+        New flat dict. Flattened keys are formatted as f"{parent}{sep}{child}".
+
+    Raises:
+        TypeError: If `data` is not a Mapping.
+        ValueError: If `max_depth` is negative.
+
+    Notes:
+        - Empty nested dicts are preserved as `{}` (nothing to flatten).
+        - Key collisions are resolved last-write-wins. With `keep_original=True`
+          the unprefixed key is written AFTER its flattened paths, so the
+          original overwrites a conflicting flattened entry if one exists.
+        - Lists of dicts are not descended into; if you need per-item
+          flattening, apply `flatten_dict` via a map/comprehension yourself.
+
+    Examples:
+        >>> flatten_dict({"a": {"b": 1, "c": 2}, "d": 3})
+        {'a__b': 1, 'a__c': 2, 'd': 3}
+
+        >>> flatten_dict({"a": {"b": {"c": 1}}})
+        {'a__b__c': 1}
+
+        >>> flatten_dict({"a": {"b": 1}}, sep=".")
+        {'a.b': 1}
+
+        >>> flatten_dict({"a": {"b": 1}, "stats": {"x": 1}}, keys_to_skip=["stats"])
+        {'a__b': 1, 'stats': {'x': 1}}
+
+        >>> flatten_dict({"a": {"b": 1}, "stats": {"x": 1}}, keys_to_flat=["a"])
+        {'a__b': 1, 'stats': {'x': 1}}
+
+        >>> flatten_dict({"a": {"b": {"c": 1}}}, max_depth=1)
+        {'a__b': {'c': 1}}
+
+        >>> flatten_dict({"a": {"b": 1}}, keep_original=True)
+        {'a__b': 1, 'a': {'b': 1}}
+    """
+    if not isinstance(data, Mapping):
+        raise TypeError("data must be a dict")
+    if max_depth is not None and max_depth < 0:
+        raise ValueError("max_depth cannot be negative")
+
+    skip_set = set(keys_to_skip)
+    flat_set = set(keys_to_flat) if keys_to_flat is not None else None
+
+    def _flatten(d: Mapping, depth_remaining: int | None) -> dict:
+        result: dict = {}
+        for k, v in d.items():
+            should_flatten = (
+                isinstance(v, Mapping)
+                and len(v) > 0
+                and k not in skip_set
+                and (flat_set is None or k in flat_set)
+                and (depth_remaining is None or depth_remaining > 0)
+            )
+            if should_flatten:
+                next_remaining = None if depth_remaining is None else depth_remaining - 1
+                for nk, nv in _flatten(v, next_remaining).items():
+                    result[f"{k}{sep}{nk}"] = nv
+                if keep_original:
+                    result[k] = v
+            else:
+                result[k] = v
+        return result
+
+    return _flatten(data, max_depth)

@@ -8,7 +8,13 @@ import pytest
 from hypothesis import given
 from hypothesis import strategies as st
 
-from etlutil import clean_dict, move_unknown_keys_to_extra, prune_data, walk
+from etlutil import (
+    clean_dict,
+    flatten_dict,
+    move_unknown_keys_to_extra,
+    prune_data,
+    walk,
+)
 from etlutil.data_structures import convert_dict_types
 
 # Property-based tests (skipped if hypothesis is not installed)
@@ -756,3 +762,148 @@ def test_clean_dict_hash_mode_produces_hex(payload, keys):
     for text in _iter_strings(result):
         if len(text) == 64:
             int(text, 16)
+
+
+# ============================================================================
+# Property-based tests for flatten_dict function
+# ============================================================================
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_no_mutation_of_input(payload):
+    """flatten_dict must not mutate the input."""
+    before = deepcopy(payload)
+    _ = flatten_dict(payload)
+    assert payload == before
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_deterministic(payload):
+    """Same input + params produce identical outputs."""
+    r1 = flatten_dict(payload, keys_to_skip=["skipme"])
+    r2 = flatten_dict(payload, keys_to_skip=["skipme"])
+    assert r1 == r2
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_fully_flat_when_no_skip(payload):
+    """With no keys_to_skip and no depth limit, output has no non-empty nested dicts."""
+    result = flatten_dict(payload)
+    for v in result.values():
+        if isinstance(v, Mapping):
+            # only empty dicts are allowed at the surface (nothing to flatten)
+            assert len(v) == 0
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_idempotent_no_skip(payload):
+    """Running flatten_dict twice with no skip yields the same result."""
+    once = flatten_dict(payload)
+    twice = flatten_dict(once)
+    assert once == twice
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_max_depth_zero_is_shallow_copy(payload):
+    """max_depth=0 is a no-op (returns a shallow copy equal to input)."""
+    result = flatten_dict(payload, max_depth=0)
+    assert result == dict(payload)
+    # mutating result must not affect original
+    result["__extra__"] = object()
+    assert "__extra__" not in payload
+
+
+@given(payload=DICT_DATA, sep=st.sampled_from(["__", ".", "/", "::", "-"]))
+def test_flatten_dict_separator_appears_in_compound_keys(payload, sep):
+    """Every compound (non-root) key in a flattened result contains `sep`."""
+    result = flatten_dict(payload, sep=sep)
+    for k in result:
+        if isinstance(k, str) and k not in payload:
+            # k was produced by flattening — must contain the separator
+            assert sep in k
+
+
+def _collect_leaves_from_dict(dict_root):
+    """Yield leaf values from a root dict.
+
+    A value is a leaf unless it's a non-empty Mapping (which gets descended into).
+    Empty Mappings ARE leaves (flatten_dict preserves them as values).
+    """
+    for v in dict_root.values():
+        if isinstance(v, Mapping) and len(v) > 0:
+            yield from _collect_leaves_from_dict(v)
+        else:
+            yield v
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_preserves_all_leaves(payload):
+    """Every leaf value from the input appears somewhere in the flat output."""
+    result = flatten_dict(payload)
+    input_leaves = list(_collect_leaves_from_dict(payload))
+    output_values = list(result.values())
+
+    for leaf in input_leaves:
+        assert any(leaf == ov or leaf is ov for ov in output_values)
+
+
+@given(payload=DICT_DATA, max_depth=st.integers(min_value=0, max_value=5))
+def test_flatten_dict_max_depth_bounds_key_segments(payload, max_depth):
+    """A flattened key has at most (max_depth + 1) segments split by `__`."""
+    result = flatten_dict(payload, max_depth=max_depth)
+    for k in result:
+        if isinstance(k, str):
+            assert len(k.split("__")) <= max_depth + 1
+
+
+@given(payload=DICT_DATA, skip=st.sets(st.text(min_size=1, max_size=5), max_size=3))
+def test_flatten_dict_skipped_keys_preserve_value(payload, skip):
+    """For every skipped key in input, its value appears unchanged in output."""
+    result = flatten_dict(payload, keys_to_skip=skip)
+    for key in skip:
+        if key in payload:
+            # skipped top-level key keeps exact same value
+            assert key in result
+            assert result[key] == payload[key]
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_keys_to_flat_empty_is_shallow_copy(payload):
+    """keys_to_flat=[] blocks all flattening — output equals a shallow copy."""
+    result = flatten_dict(payload, keys_to_flat=[])
+    assert result == dict(payload)
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_keys_to_flat_none_equals_default(payload):
+    """keys_to_flat=None is equivalent to the default (flatten everything)."""
+    assert flatten_dict(payload) == flatten_dict(payload, keys_to_flat=None)
+
+
+@given(payload=DICT_DATA, whitelist=st.sets(st.text(min_size=1, max_size=5), max_size=3))
+def test_flatten_dict_non_whitelisted_dicts_stay_nested(payload, whitelist):
+    """Any non-empty dict value whose key is NOT in keys_to_flat must stay nested."""
+    result = flatten_dict(payload, keys_to_flat=whitelist)
+    for k, v in payload.items():
+        if isinstance(v, Mapping) and len(v) > 0 and k not in whitelist:
+            assert k in result
+            assert result[k] == v
+
+
+@given(payload=DICT_DATA)
+def test_flatten_dict_keep_original_preserves_top_level_keys(payload):
+    """keep_original=True keeps every original top-level key in output."""
+    result = flatten_dict(payload, keep_original=True)
+    for k, v in payload.items():
+        assert k in result
+        assert result[k] == v
+
+
+@given(payload=DICT_DATA, skip=st.sets(st.text(min_size=1, max_size=5), max_size=3))
+def test_flatten_dict_skip_wins_over_flat(payload, skip):
+    """A key in both keys_to_flat and keys_to_skip is never flattened."""
+    # put every skip key also in the whitelist
+    result = flatten_dict(payload, keys_to_flat=list(skip), keys_to_skip=skip)
+    for k in skip:
+        if k in payload:
+            assert result[k] == payload[k]
