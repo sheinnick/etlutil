@@ -347,7 +347,34 @@ class DateRange:
         """
         return {"since": self.date_start, "until": self.date_end}
 
-    def to_reddit_range(self, tz: str | None = None) -> dict[str, str]:
+    def to_bing_CustomDateRange(self) -> dict[str, dict[str, int]]:
+        """Convert to Bing Ads API ReportTime format.
+
+        Returns:
+            Dictionary with CustomDateRangeStart and CustomDateRangeEnd
+
+        Examples:
+            >>> dr = DateRange("2024-01-01", "2024-01-31")
+            >>> dr.to_bing_CustomDateRange()
+            {'CustomDateRangeStart': {'Day': 1, 'Month': 1, 'Year': 2024}, 'CustomDateRangeEnd': {'Day': 31, 'Month': 1, 'Year': 2024}}
+        """
+        start_date = date.fromisoformat(self.date_start)
+        end_date = date.fromisoformat(self.date_end)
+
+        return {
+            "CustomDateRangeStart": {
+                "Day": start_date.day,
+                "Month": start_date.month,
+                "Year": start_date.year,
+            },
+            "CustomDateRangeEnd": {
+                "Day": end_date.day,
+                "Month": end_date.month,
+                "Year": end_date.year,
+            },
+        }
+
+    def to_reddit_range(self, tz: str | None = "UTC") -> dict[str, str]:
         """Convert to Reddit API timestamp range format.
 
         Args:
@@ -439,6 +466,96 @@ class DateRange:
             key_start: dt_start.isoformat().replace("+00:00", "Z"),
             key_end: dt_end.isoformat().replace("+00:00", "Z"),
         }
+
+    def to_timestamps_but_same_dates(
+        self,
+        time: str = "00:00:00",
+        tz: str | None = None,
+        key_start: str = "starts_at",
+        key_end: str = "ends_at",
+    ) -> dict[str, str]:
+        """Convert date range to UTC timestamps in ISO 8601 format (no end-day shift).
+
+        Unlike :meth:`to_timestamps`, the end date is NOT extended by 1 day — both
+        bounds keep the exact calendar dates from the range.
+
+        Args:
+            time: Time in HH:MM:SS format (default "00:00:00")
+            tz: Timezone name (e.g., 'Asia/Tbilisi'). If None, treats as UTC
+            key_start: Key name for start timestamp (default "starts_at")
+            key_end: Key name for end timestamp (default "ends_at")
+
+        Returns:
+            Dictionary with UTC timestamps in ISO format ending with 'Z'
+
+        Examples:
+            >>> dr = DateRange("2024-01-01", "2024-01-02")
+            >>> dr.to_timestamps_but_same_dates()
+            {'starts_at': '2024-01-01T00:00:00Z', 'ends_at': '2024-01-02T00:00:00Z'}
+
+            >>> dr.to_timestamps_but_same_dates(time="12:30:00", tz="Europe/Moscow")
+            {'starts_at': '2024-01-01T09:30:00Z', 'ends_at': '2024-01-02T09:30:00Z'}
+        """
+        date_start = to_date(self.date_start)
+        date_end = to_date(self.date_end)
+
+        # Parse time components
+        time_parts = time.split(":")
+        hour, minute, second = (
+            int(time_parts[0]),
+            int(time_parts[1]),
+            int(time_parts[2]),
+        )
+
+        if tz is None:
+            # Already UTC - create datetime objects directly in UTC
+            dt_start = datetime.combine(
+                date_start,
+                datetime.min.time().replace(hour=hour, minute=minute, second=second),
+                UTC,
+            )
+            dt_end = datetime.combine(
+                date_end,
+                datetime.min.time().replace(hour=hour, minute=minute, second=second),
+                UTC,
+            )
+        else:
+            # Create datetime in specified timezone and convert to UTC
+            local_tz = ZoneInfo(tz)
+            dt_start = datetime.combine(
+                date_start,
+                datetime.min.time().replace(hour=hour, minute=minute, second=second),
+                local_tz,
+            ).astimezone(UTC)
+            dt_end = datetime.combine(
+                date_end,
+                datetime.min.time().replace(hour=hour, minute=minute, second=second),
+                local_tz,
+            ).astimezone(UTC)
+
+        return {
+            key_start: dt_start.isoformat().replace("+00:00", "Z"),
+            key_end: dt_end.isoformat().replace("+00:00", "Z"),
+        }
+
+    def to_reddit_range_but_same_dates(self, tz: str | None = "UTC") -> dict[str, str]:
+        """Convert to Reddit API timestamp range format without extending end date.
+
+        Unlike :meth:`to_reddit_range`, the end bound keeps the exact calendar date
+        from the range (no +1 day shift).
+
+        Args:
+            tz: Timezone name (e.g., 'Asia/Tbilisi'). If None, uses UTC
+
+        Returns:
+            Dictionary with 'starts_at' and 'ends_at' UTC timestamps
+
+        Examples:
+            >>> dr = DateRange("2024-01-01", "2024-01-02")
+            >>> dr.to_reddit_range_but_same_dates()
+            {'starts_at': '2024-01-01T00:00:00Z', 'ends_at': '2024-01-02T00:00:00Z'}
+        """
+        return self.to_timestamps_but_same_dates(tz=tz, key_start="starts_at", key_end="ends_at")
 
     def split(self, chunk_days: int) -> list[DateRange]:
         """Split date range into chunks of specified size.

@@ -1203,6 +1203,62 @@ class TestDateRange:
         assert result["starts_at"] == "2024-01-01T00:00:00Z"
         assert result["ends_at"] == "2024-01-02T00:00:00Z"
 
+    def test_to_bing_CustomDateRange(self):
+        """Test to_bing_CustomDateRange method."""
+        dr = DateRange("2024-01-01", "2024-01-31")
+        result = dr.to_bing_CustomDateRange()
+
+        assert result == {
+            "CustomDateRangeStart": {"Day": 1, "Month": 1, "Year": 2024},
+            "CustomDateRangeEnd": {"Day": 31, "Month": 1, "Year": 2024},
+        }
+
+    def test_to_bing_CustomDateRange_single_day(self):
+        """Test to_bing_CustomDateRange for single day range."""
+        dr = DateRange("2023-12-31")
+        result = dr.to_bing_CustomDateRange()
+
+        assert result == {
+            "CustomDateRangeStart": {"Day": 31, "Month": 12, "Year": 2023},
+            "CustomDateRangeEnd": {"Day": 31, "Month": 12, "Year": 2023},
+        }
+
+    def test_to_timestamps_but_same_dates_utc(self):
+        """to_timestamps_but_same_dates must NOT shift end by +1 day."""
+        dr = DateRange("2024-01-01", "2024-01-02")
+        result = dr.to_timestamps_but_same_dates()
+
+        assert result["starts_at"] == "2024-01-01T00:00:00Z"
+        assert result["ends_at"] == "2024-01-02T00:00:00Z"
+
+    def test_to_timestamps_but_same_dates_with_timezone(self):
+        """to_timestamps_but_same_dates converts tz to UTC without +1 day."""
+        dr = DateRange("2024-01-01", "2024-01-01")
+        result = dr.to_timestamps_but_same_dates(time="12:30:00", tz="Europe/Moscow")
+
+        # Moscow is UTC+3, so 12:30 Moscow == 09:30 UTC
+        assert result["starts_at"] == "2024-01-01T09:30:00Z"
+        assert result["ends_at"] == "2024-01-01T09:30:00Z"
+
+    def test_to_timestamps_but_same_dates_custom_keys(self):
+        """to_timestamps_but_same_dates honors custom key names."""
+        dr = DateRange("2024-01-01", "2024-01-02")
+        result = dr.to_timestamps_but_same_dates(key_start="from", key_end="to")
+
+        assert set(result.keys()) == {"from", "to"}
+        assert result["from"] == "2024-01-01T00:00:00Z"
+        assert result["to"] == "2024-01-02T00:00:00Z"
+
+    def test_to_reddit_range_but_same_dates(self):
+        """to_reddit_range_but_same_dates must NOT shift end by +1 day."""
+        dr = DateRange("2024-01-01", "2024-01-02")
+        result = dr.to_reddit_range_but_same_dates()
+
+        assert result == {
+            "starts_at": "2024-01-01T00:00:00Z",
+            "ends_at": "2024-01-02T00:00:00Z",
+        }
+
 
 class TestDateRanges:
     """Test cases for DateRanges class."""
