@@ -10,6 +10,7 @@ from hypothesis import strategies as st
 
 from etlutil import (
     clean_dict,
+    convert_to_json_string,
     flatten_dict,
     move_unknown_keys_to_extra,
     normalize_date_fields,
@@ -996,3 +997,38 @@ def test_normalize_date_fields_keep_original_preserves_all_input_keys(payload):
     for k, v in payload.items():
         assert k in result
         assert result[k] == v
+
+
+# ============================================================================
+# Property-based tests for convert_to_json_string function
+# ============================================================================
+
+
+@given(payload=DICT_DATA)
+def test_convert_to_json_string_no_mutation(payload):
+    before = deepcopy(payload)
+    _ = convert_to_json_string(payload)
+    assert payload == before
+
+
+@given(payload=DICT_DATA)
+def test_convert_to_json_string_idempotent(payload):
+    """Running convert_to_json_string twice yields the same result."""
+    once = convert_to_json_string(payload)
+    twice = convert_to_json_string(once)
+    assert once == twice
+
+
+@given(payload=DICT_DATA)
+def test_convert_to_json_string_output_values_are_str_or_none(payload):
+    """Every output value is either a string or None (never dict/list/int/bool)."""
+    result = convert_to_json_string(payload)
+    for v in result.values():
+        assert v is None or isinstance(v, str)
+
+
+@given(payload=DICT_DATA)
+def test_convert_to_json_string_preserves_keys(payload):
+    """Key set is unchanged by conversion."""
+    result = convert_to_json_string(payload)
+    assert set(result.keys()) == set(payload.keys())

@@ -8,6 +8,7 @@ Built for clarity, speed, and reuse.
 from .data_structures import (
     clean_dict,
     convert_dict_types,
+    convert_to_json_string,
     flatten_dict,
     move_unknown_keys_to_extra,
     normalize_date_fields,
@@ -41,6 +42,7 @@ __all__ = [
     # Container helpers
     "clean_dict",
     "convert_dict_types",
+    "convert_to_json_string",
     "flatten_dict",
     "move_unknown_keys_to_extra",
     "normalize_date_fields",

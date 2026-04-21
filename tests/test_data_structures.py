@@ -10,6 +10,7 @@ import pytest
 
 from etlutil import (
     clean_dict,
+    convert_to_json_string,
     flatten_dict,
     move_unknown_keys_to_extra,
     normalize_date_fields,
@@ -1625,6 +1626,103 @@ def test_normalize_date_fields_intercom_like():
     # originals gone
     assert "created_at" not in result
     assert "waiting_since" not in result
+
+
+# ============================================================================
+# Tests for convert_to_json_string function
+# ============================================================================
+
+
+def test_convert_to_json_string_nested_values_become_json_strings():
+    data = {"id": 1, "tags": ["a", "b"], "meta": {"k": 1}}
+    result = convert_to_json_string(data)
+    assert result["id"] == "1"
+    assert result["tags"] == '["a", "b"]'
+    assert result["meta"] == '{"k": 1}'
+
+
+def test_convert_to_json_string_preserves_none():
+    """None stays None so BQ sees NULL, not the string 'null'."""
+    assert convert_to_json_string({"x": None}) == {"x": None}
+
+
+def test_convert_to_json_string_leaves_strings_unchanged():
+    """Already-string values are not re-encoded (prevents double-quoting)."""
+    data = {"already_json": '{"k": 1}', "plain": "hello"}
+    assert convert_to_json_string(data) == data
+
+
+def test_convert_to_json_string_is_idempotent():
+    """Running twice yields the same result."""
+    data = {"id": 1, "tags": ["a", "b"], "meta": {"k": 1}, "note": None, "kept": "hi"}
+    once = convert_to_json_string(data)
+    twice = convert_to_json_string(once)
+    assert once == twice
+
+
+def test_convert_to_json_string_primitives():
+    data = {"i": 42, "f": 3.14, "b": True, "n": None, "s": "x"}
+    result = convert_to_json_string(data)
+    assert result == {"i": "42", "f": "3.14", "b": "true", "n": None, "s": "x"}
+
+
+def test_convert_to_json_string_keys_whitelist():
+    """Only listed keys get processed; others pass through untouched."""
+    data = {"id": 1, "meta": {"k": 1}, "actions": [1, 2]}
+    result = convert_to_json_string(data, keys=["meta"])
+    assert result == {"id": 1, "meta": '{"k": 1}', "actions": [1, 2]}
+
+
+def test_convert_to_json_string_keys_whitelist_does_not_touch_primitive_if_excluded():
+    data = {"id": 1, "meta": {"k": 1}}
+    result = convert_to_json_string(data, keys=["nonexistent"])
+    assert result == data  # nothing changed
+
+
+def test_convert_to_json_string_datetime_via_default_str():
+    from datetime import datetime
+
+    data = {"ts": datetime(2024, 1, 1, 12, 0)}
+    result = convert_to_json_string(data)
+    # json.dumps + default=str → wraps the str() repr in JSON quotes
+    assert result["ts"] == '"2024-01-01 12:00:00"'
+
+
+def test_convert_to_json_string_empty_containers_produce_json_strings():
+    """Empty dict/list become the strings '{}'/'[]' (not None)."""
+    assert convert_to_json_string({"d": {}, "l": []}) == {"d": "{}", "l": "[]"}
+
+
+def test_convert_to_json_string_unicode_preserved_by_default():
+    data = {"ru": {"msg": "привет"}}
+    result = convert_to_json_string(data)
+    assert "привет" in result["ru"]
+
+
+def test_convert_to_json_string_ensure_ascii_true():
+    data = {"ru": {"msg": "привет"}}
+    result = convert_to_json_string(data, ensure_ascii=True)
+    assert "\\u" in result["ru"]
+
+
+def test_convert_to_json_string_immutability():
+    data = {"meta": {"k": 1}, "tags": ["a", "b"]}
+    original = deepcopy(data)
+    _ = convert_to_json_string(data)
+    assert data == original
+
+
+def test_convert_to_json_string_non_dict_input_raises():
+    with pytest.raises(TypeError):
+        convert_to_json_string([1, 2, 3])
+
+
+def test_convert_to_json_string_skips_non_json_dict_keys():
+    """Dict values with non-JSON-serializable keys (e.g. tuples) are handled gracefully."""
+    data = {"meta": {(0, 0): "tuple-key-val", "ok_key": 1}}
+    result = convert_to_json_string(data)
+    # tuple-keyed entry is dropped silently by skipkeys=True; other keys preserved.
+    assert '"ok_key"' in result["meta"]
 
 
 def test_clean_dict_skip_rules_allowlist():

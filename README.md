@@ -18,6 +18,7 @@ A lightweight Python toolkit with reusable helpers and wrappers for everyday ETL
   - Date/datetime field rename + convert via `normalize_date_fields` (enforce `date_`/`datetime_` convention)
   - Schema-driven value conversion with `convert_dict_types` (int/float/bool/date/datetime/timestamp family)
   - Sensitive field scrubbing with `clean_dict` (replace/hash/fingerprint/delete modes)
+  - Stringify heterogeneous values for columnar export via `convert_to_json_string` (BQ/Parquet/CSV-safe, idempotent)
 - **Data Structure Visualization**:
   - Tree-style visualization and data collection via `walk`
 
@@ -402,6 +403,66 @@ Key points:
 - **`recursive=True`** descends into nested dicts (lists are NOT descended into)
 - **`keep_original=True`** keeps the original field alongside the renamed one; default `False` is a pure rename
 - **Immutable**: original dict is not mutated
+
+### JSON-Stringify Values for Columnar Export (convert_to_json_string)
+
+Turn heterogeneous / nested dict values into JSON strings (or plain strings) so that
+every column has a stable textual representation. Useful before loading into BigQuery
+`STRING` columns, Parquet, or CSV when nested objects and arrays would otherwise break
+the schema.
+
+```python
+from etlutil import convert_to_json_string
+
+record = {
+    "id": 1,
+    "tags": ["a", "b"],
+    "meta": {"k": 1},
+    "note": None,
+    "already_json": '{"k": 1}',
+}
+
+# 1) Default: process every value
+convert_to_json_string(record)
+# {
+#   "id": "1",
+#   "tags": '["a", "b"]',
+#   "meta": '{"k": 1}',
+#   "note": None,                 # None stays None → NULL in BQ
+#   "already_json": '{"k": 1}',   # strings pass through unchanged
+# }
+
+# 2) Idempotent — running twice yields the same result
+once  = convert_to_json_string(record)
+twice = convert_to_json_string(once)
+assert once == twice
+
+# 3) Whitelist — only listed keys get converted
+convert_to_json_string({"id": 1, "meta": {"k": 1}, "actions": [1, 2]}, keys=["meta"])
+# {"id": 1, "meta": '{"k": 1}', "actions": [1, 2]}
+
+# 4) Non-JSON-serializable values fall back to str() via default=str
+from datetime import datetime
+convert_to_json_string({"ts": datetime(2024, 1, 1, 12, 0)})
+# {"ts": '"2024-01-01 12:00:00"'}
+
+# 5) Keep non-ASCII characters readable (default) or escape them
+convert_to_json_string({"ru": {"msg": "привет"}})
+# {"ru": '{"msg": "привет"}'}
+convert_to_json_string({"ru": {"msg": "привет"}}, ensure_ascii=True)
+# {"ru": '{"msg": "\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442"}'}
+```
+
+Key points:
+
+- **Per-value behavior**: `None` → `None` (preserves NULL in BQ); `str` → unchanged (no re-encoding / no double-quoting); anything else → `json.dumps(value, default=str)`
+- **Idempotent**: safe to run twice — already-stringified values pass through untouched
+- **`keys` whitelist**: `None` (default) processes every value; a list restricts conversion to listed keys, others pass through unchanged
+- **`ensure_ascii`**: forwarded to `json.dumps`; defaults to `False` for readable multi-language output
+- **`default=str` fallback**: `datetime`, `Decimal`, and other non-serializable objects are converted via their `str()` representation
+- **`skipkeys=True`**: nested dict entries with non-JSON-serializable keys (e.g. tuples) are silently dropped instead of raising
+- **Immutable**: original dict is not mutated; a new dict is returned
+- **Non-dict input** raises `TypeError`
 
 ### Date Processing (Quick Examples)
 

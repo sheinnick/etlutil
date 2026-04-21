@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import importlib
+import json
 import re
 from collections.abc import Callable, Hashable, Iterable, Mapping, Sequence
 from collections.abc import Set as AbcSet
@@ -1758,3 +1759,68 @@ def _apply_date_rules(
         new_value = _convert_value(value, convert_type, strict, False, datetime_formats)
         return new_key, new_value
     return key, value
+
+
+def convert_to_json_string(
+    record: dict,
+    keys: Iterable[str] | None = None,
+    *,
+    ensure_ascii: bool = False,
+) -> dict:
+    """Turn values into JSON strings (or plain strings) for columnar export.
+
+    Useful when loading heterogeneous / nested data into columnar storage
+    (BigQuery STRING columns, Parquet, CSV) where every column needs a
+    stable textual representation. Idempotent — running twice doesn't
+    double-encode strings.
+
+    Per-value behavior:
+        - None → None  (preserves NULL in BQ)
+        - str → unchanged  (no re-encoding)
+        - anything else → ``json.dumps(value, default=str)`` ; non-JSON-serializable
+          values (datetime, Decimal, custom objects) fall back to their ``str()``
+          via the ``default=str`` hook.
+
+    Args:
+        record: Input dict. Not mutated.
+        keys: Optional whitelist. ``None`` (default) processes every value in the
+            record. A list restricts processing to only those keys; values for
+            other keys pass through unchanged.
+        ensure_ascii: Forwarded to ``json.dumps``. Defaults to ``False`` to keep
+            non-ASCII characters readable (useful for multi-language data).
+
+    Returns:
+        New dict with same keys; converted values are strings or None.
+
+    Examples:
+        >>> convert_to_json_string({"id": 1, "tags": ["a", "b"], "meta": {"k": 1}, "note": None})
+        {'id': '1', 'tags': '["a", "b"]', 'meta': '{"k": 1}', 'note': None}
+
+        >>> # idempotent on already-string values
+        >>> convert_to_json_string({"payload": '{"k": 1}'})
+        {'payload': '{"k": 1}'}
+
+        >>> # limit to specific keys
+        >>> convert_to_json_string({"id": 1, "meta": {"k": 1}}, keys=["meta"])
+        {'id': 1, 'meta': '{"k": 1}'}
+
+        >>> # non-JSON-serializable values fall back to str()
+        >>> from datetime import datetime
+        >>> convert_to_json_string({"ts": datetime(2024, 1, 1, 12, 0)})
+        {'ts': '"2024-01-01 12:00:00"'}
+    """
+    if not isinstance(record, dict):
+        raise TypeError("record must be a dict")
+
+    target_keys = set(keys) if keys is not None else None
+
+    def _encode(v: Any) -> Any:
+        if v is None:
+            return None
+        if isinstance(v, str):
+            return v
+        # skipkeys=True drops non-string/number dict keys instead of raising;
+        # default=str handles non-serializable values (datetime, Decimal, custom objects).
+        return json.dumps(v, ensure_ascii=ensure_ascii, default=str, skipkeys=True)
+
+    return {k: (_encode(v) if (target_keys is None or k in target_keys) else v) for k, v in record.items()}
