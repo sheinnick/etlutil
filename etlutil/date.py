@@ -712,6 +712,47 @@ class DateRange:
         return DateRange(to_date_iso_str(month_start), to_date_iso_str(month_end))
 
     @staticmethod
+    def split_month_8_8_8_rest(date_anchor: DateLike | None = None) -> list[DateRange]:
+        """Split the month containing date_anchor into 4 fixed chunks: 1-8, 9-16, 17-24, 25-end.
+
+        Chunk sizes are 8/8/8/rest, where the last chunk covers 4-7 days depending
+        on the month length (including Feb 28/29).
+
+        Args:
+            date_anchor: Any date inside the target month (default: today)
+
+        Returns:
+            List of 4 DateRange objects in calendar order (chunk 1 → chunk 4)
+
+        Examples:
+            >>> chunks = DateRange.split_month_8_8_8_rest(date_anchor="2024-02-15")
+            >>> [str(c) for c in chunks]
+            ['[2024-02-01 → 2024-02-08]', '[2024-02-09 → 2024-02-16]', '[2024-02-17 → 2024-02-24]', '[2024-02-25 → 2024-02-29]']
+
+            >>> str(DateRange.split_month_8_8_8_rest(date_anchor="2026-02-15")[-1])
+            '[2026-02-25 → 2026-02-28]'
+
+            >>> str(DateRange.split_month_8_8_8_rest(date_anchor="2024-01-15")[-1])
+            '[2024-01-25 → 2024-01-31]'
+        """
+        anchor = to_date(date_anchor or date.today())
+        year, month = anchor.year, anchor.month
+
+        # Last day of month via next-month-first-day - 1 day
+        if month == 12:
+            next_month_first = date(year + 1, 1, 1)
+        else:
+            next_month_first = date(year, month + 1, 1)
+        last_day = (next_month_first - timedelta(days=1)).day
+
+        return [
+            DateRange(date(year, month, 1), date(year, month, 8)),
+            DateRange(date(year, month, 9), date(year, month, 16)),
+            DateRange(date(year, month, 17), date(year, month, 24)),
+            DateRange(date(year, month, 25), date(year, month, last_day)),
+        ]
+
+    @staticmethod
     def single_calendar_period(date_part: DatePart, offset: int = 0, date_anchor: DateLike | None = None) -> DateRange:
         """Create single calendar period with offset.
 

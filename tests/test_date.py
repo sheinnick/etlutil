@@ -1171,6 +1171,60 @@ class TestDateRange:
         assert dr.date_start == "2024-06-03"
         assert dr.date_end == "2024-06-09"
 
+    # ==================== split_month_8_8_8_rest ====================
+    def test_split_month_8_8_8_rest_31_day_month(self):
+        """January (31 days) → last chunk 25-31 (7 days)."""
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor="2024-01-15")
+        assert len(chunks) == 4
+        assert chunks[0].as_tuple() == ("2024-01-01", "2024-01-08")
+        assert chunks[1].as_tuple() == ("2024-01-09", "2024-01-16")
+        assert chunks[2].as_tuple() == ("2024-01-17", "2024-01-24")
+        assert chunks[3].as_tuple() == ("2024-01-25", "2024-01-31")
+
+    def test_split_month_8_8_8_rest_30_day_month(self):
+        """April (30 days) → last chunk 25-30 (6 days)."""
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor="2024-04-10")
+        assert chunks[3].as_tuple() == ("2024-04-25", "2024-04-30")
+
+    def test_split_month_8_8_8_rest_february_leap(self):
+        """February 2024 (leap, 29 days) → last chunk 25-29 (5 days)."""
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor="2024-02-15")
+        assert chunks[3].as_tuple() == ("2024-02-25", "2024-02-29")
+
+    def test_split_month_8_8_8_rest_february_non_leap(self):
+        """February 2026 (non-leap, 28 days) → last chunk 25-28 (4 days)."""
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor="2026-02-15")
+        assert chunks[3].as_tuple() == ("2026-02-25", "2026-02-28")
+
+    def test_split_month_8_8_8_rest_december_no_year_overflow(self):
+        """December → last_day computed via January of next year, no overflow bug."""
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor="2024-12-15")
+        assert chunks[3].as_tuple() == ("2024-12-25", "2024-12-31")
+
+    def test_split_month_8_8_8_rest_anchor_at_edges(self):
+        """Anchor on day 1 and last day returns the same chunks."""
+        first = DateRange.split_month_8_8_8_rest(date_anchor="2024-03-01")
+        last = DateRange.split_month_8_8_8_rest(date_anchor="2024-03-31")
+        assert [c.as_tuple() for c in first] == [c.as_tuple() for c in last]
+        assert first[0].as_tuple() == ("2024-03-01", "2024-03-08")
+        assert first[3].as_tuple() == ("2024-03-25", "2024-03-31")
+
+    def test_split_month_8_8_8_rest_date_object_input(self):
+        """Accepts a date object, not just ISO string."""
+        from datetime import date as _date
+        chunks = DateRange.split_month_8_8_8_rest(date_anchor=_date(2024, 6, 20))
+        assert chunks[0].as_tuple() == ("2024-06-01", "2024-06-08")
+        assert chunks[3].as_tuple() == ("2024-06-25", "2024-06-30")
+
+    def test_split_month_8_8_8_rest_chunk_sizes_invariant(self):
+        """First three chunks are always exactly 8 days; last is 4-7."""
+        for anchor in ["2024-01-15", "2024-02-15", "2026-02-15", "2024-04-15", "2024-12-15"]:
+            chunks = DateRange.split_month_8_8_8_rest(date_anchor=anchor)
+            assert chunks[0].days_count() == 8
+            assert chunks[1].days_count() == 8
+            assert chunks[2].days_count() == 8
+            assert 4 <= chunks[3].days_count() <= 7
+
     # ==================== TIMESTAMP METHODS ====================
     def test_to_timestamps_utc(self):
         """Test to_timestamps method with UTC."""
